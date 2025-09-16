@@ -1,0 +1,88 @@
+# Rust 构建产物
+/target/
+**/*.rs.bk
+*.pdb
+
+# 包文件和分发产物
+package/
+*.tar.gz
+*.zip
+
+# 备份文件
+*.backup
+*.bak
+*.swp
+*.tmp
+
+# 测试文件和临时脚本
+test_interactive.sh
+test_*.sh
+test_*.rs
+*_test.*
+temp_*
+
+# IDE 和编辑器文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 日志文件
+*.log
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local
+
+# 本地配置文件
+config.local.toml
+settings.local.toml
+
+# 缓存目录
+.cache/
+*.cache
+
+# 调试文件
+debug/
+release/
+
+# 依赖分析文件
+depgraph.dot
+callgraph.svg
+
+# 性能分析文件
+*.prof
+*.pprof
+
+# 文档生成产物
+/doc/
+/docs/
+/html/
+
+# 覆盖率报告
+tarpaulin-report.html
+coverage/
+*.coverage
+
+# Clippy 输出
+clippy.toml
+
+# Rustfmt 跳过格式化的文件
+rustfmt-skip.toml
+
+# 其他临时文件
+*.tmp
+*.temp
+*.orig
+
