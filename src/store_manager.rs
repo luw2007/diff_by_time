@@ -238,6 +238,65 @@ impl StoreManager {
         Ok(records)
     }
 
+    pub fn backup_by_file(&self, file_path: &Path, i18n: &crate::i18n::I18n) -> Result<usize> {
+        let records = self.get_all_records()?;
+
+        let target_path = match fs::canonicalize(file_path) {
+            Ok(abs_path) => abs_path,
+            Err(_) => file_path.to_path_buf(),
+        };
+
+        let mut to_backup: Vec<CommandRecord> = Vec::new();
+
+        for record in records {
+            let mut matched = false;
+            if record.working_dir == target_path {
+                matched = true;
+            }
+            let file_str = file_path.to_string_lossy();
+            let target_str = target_path.to_string_lossy();
+            if record.command.contains(file_str.as_ref()) || record.command.contains(target_str.as_ref()) {
+                matched = true;
+            }
+            if let Some(rel_path) = pathdiff::diff_paths(file_path, &record.working_dir) {
+                let rel_str = rel_path.to_string_lossy();
+                if record.command.contains(rel_str.as_ref()) {
+                    matched = true;
+                }
+            }
+            if matched {
+                to_backup.push(record);
+            }
+        }
+
+        if to_backup.is_empty() {
+            return Ok(0);
+        }
+
+        // Append to current year's archive (index_YYYY.json), deduplicating by record_id
+        let year = chrono::Utc::now().year() as u32;
+        let archive_path = self.base_dir.join(format!("index_{}.json", year));
+
+        let mut existing: Vec<CommandRecord> = if archive_path.exists() {
+            if let Ok(content) = fs::read_to_string(&archive_path) {
+                serde_json::from_str(&content).unwrap_or_default()
+            } else { Vec::new() }
+        } else { Vec::new() };
+
+        let mut seen: std::collections::HashSet<String> = existing.iter().map(|r| r.record_id.clone()).collect();
+        for r in to_backup {
+            if seen.insert(r.record_id.clone()) {
+                existing.push(r);
+            }
+        }
+
+        existing.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        serde_json::to_writer_pretty(fs::File::create(&archive_path)?, &existing)
+            .context(i18n.t_format("error_save_archive", &[&year.to_string()]))?;
+
+        Ok(existing.len())
+    }
+
     pub fn clean_by_query(&self, query: &str, i18n: &crate::i18n::I18n) -> Result<usize> {
         let records = self.get_all_records()?;
         let mut cleaned = 0;
