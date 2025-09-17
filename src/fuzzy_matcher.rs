@@ -23,12 +23,9 @@ impl SkimMatcher {
 
     /// Perform fuzzy matching and return match score
     pub fn fuzzy_match(&self, pattern: &str, text: &str) -> Option<MatchResult> {
-        self.matcher.fuzzy_indices(text, pattern).map(|(score, indices)| {
-            MatchResult {
-                score,
-                indices,
-            }
-        })
+        self.matcher
+            .fuzzy_indices(text, pattern)
+            .map(|(score, indices)| MatchResult { score, indices })
     }
 
     /// Perform exact match (priority)
@@ -103,7 +100,11 @@ impl SkimMatcher {
     }
 
     /// Match and sort multiple items
-    pub fn match_and_sort<T>(&self, pattern: &str, items: Vec<(T, String)>) -> Vec<(T, String, MatchResult)> {
+    pub fn match_and_sort<T>(
+        &self,
+        pattern: &str,
+        items: Vec<(T, String)>,
+    ) -> Vec<(T, String, MatchResult)> {
         let mut results: Vec<(T, String, MatchResult)> = Vec::new();
 
         for (item, text) in items {

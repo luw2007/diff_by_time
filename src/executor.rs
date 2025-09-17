@@ -1,9 +1,9 @@
+use crate::storage::{CommandExecution, CommandRecord};
+use anyhow::{Context, Result};
+use chrono::Utc;
+use sha2::{Digest, Sha256};
 use std::process::Command;
 use std::time::Instant;
-use anyhow::{Result, Context};
-use crate::storage::{CommandRecord, CommandExecution};
-use chrono::Utc;
-use sha2::{Sha256, Digest};
 
 fn format_command(command: &str) -> String {
     // Remove leading and trailing whitespace

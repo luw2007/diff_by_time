@@ -1,9 +1,9 @@
-use anyhow::{Result, Context};
+use crate::storage::{CommandExecution, CommandRecord};
+use anyhow::{Context, Result};
+use chrono::{Datelike, Duration, Utc};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::storage::{CommandExecution, CommandRecord};
-use chrono::{Duration, Utc, Datelike};
-use std::collections::HashSet;
 
 pub struct StoreManager {
     base_dir: PathBuf,
@@ -11,43 +11,55 @@ pub struct StoreManager {
 }
 
 impl StoreManager {
-    pub fn new_with_config(config: crate::config::Config, i18n: &crate::i18n::I18n) -> Result<Self> {
+    pub fn new_with_config(
+        config: crate::config::Config,
+        i18n: &crate::i18n::I18n,
+    ) -> Result<Self> {
         let base_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".dt");
 
-        fs::create_dir_all(&base_dir)
-            .context(i18n.t("error_create_dt_dir"))?;
+        fs::create_dir_all(&base_dir).context(i18n.t("error_create_dt_dir"))?;
 
         let records_dir = base_dir.join("records");
-        fs::create_dir_all(&records_dir)
-            .context(i18n.t("error_create_records_dir"))?;
+        fs::create_dir_all(&records_dir).context(i18n.t("error_create_records_dir"))?;
 
         Ok(Self { base_dir, config })
     }
 
     // Removed unused convenience constructor to avoid dead_code warnings.
 
-    pub fn save_execution(&self, execution: &CommandExecution, i18n: &crate::i18n::I18n) -> Result<()> {
-        let record_dir = self.base_dir
+    pub fn save_execution(
+        &self,
+        execution: &CommandExecution,
+        i18n: &crate::i18n::I18n,
+    ) -> Result<()> {
+        let record_dir = self
+            .base_dir
             .join("records")
             .join(&execution.record.command_hash);
 
-        fs::create_dir_all(&record_dir)
-            .context(i18n.t("error_create_record_dir"))?;
+        fs::create_dir_all(&record_dir).context(i18n.t("error_create_record_dir"))?;
 
-        let meta_path = record_dir.join(format!("meta_{}.json", execution.record.timestamp.timestamp()));
-        let stdout_path = record_dir.join(format!("stdout_{}.txt", execution.record.timestamp.timestamp()));
-        let stderr_path = record_dir.join(format!("stderr_{}.txt", execution.record.timestamp.timestamp()));
+        let meta_path = record_dir.join(format!(
+            "meta_{}.json",
+            execution.record.timestamp.timestamp()
+        ));
+        let stdout_path = record_dir.join(format!(
+            "stdout_{}.txt",
+            execution.record.timestamp.timestamp()
+        ));
+        let stderr_path = record_dir.join(format!(
+            "stderr_{}.txt",
+            execution.record.timestamp.timestamp()
+        ));
 
         serde_json::to_writer_pretty(fs::File::create(&meta_path)?, &execution.record)
             .context(i18n.t("error_save_metadata"))?;
 
-        fs::write(&stdout_path, &execution.stdout)
-            .context(i18n.t("error_save_stdout"))?;
+        fs::write(&stdout_path, &execution.stdout).context(i18n.t("error_save_stdout"))?;
 
-        fs::write(&stderr_path, &execution.stderr)
-            .context(i18n.t("error_save_stderr"))?;
+        fs::write(&stderr_path, &execution.stderr).context(i18n.t("error_save_stderr"))?;
 
         self.update_index(&execution.record, i18n)?;
 
@@ -56,7 +68,11 @@ impl StoreManager {
 
     /// Assign a minimal unused short code for the given record (per command hash).
     /// Codes are bijective base62 with alphabet a-zA-Z0-9, starting from 1 => 'a'.
-    pub fn assign_short_code(&self, record: &mut CommandRecord, _i18n: &crate::i18n::I18n) -> Result<()> {
+    pub fn assign_short_code(
+        &self,
+        record: &mut CommandRecord,
+        _i18n: &crate::i18n::I18n,
+    ) -> Result<()> {
         let record_dir = self.base_dir.join("records").join(&record.command_hash);
 
         let mut used: HashSet<String> = HashSet::new();
@@ -67,9 +83,16 @@ impl StoreManager {
                 let path = entry.path();
 
                 if path.extension().and_then(|s| s.to_str()) == Some("json")
-                    && path.file_name().unwrap().to_str().unwrap().starts_with("meta_")
+                    && path
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .starts_with("meta_")
                 {
-                    if let Ok(existing) = serde_json::from_reader::<_, CommandRecord>(fs::File::open(&path)?) {
+                    if let Ok(existing) =
+                        serde_json::from_reader::<_, CommandRecord>(fs::File::open(&path)?)
+                    {
                         if let Some(code) = existing.short_code {
                             used.insert(code);
                         }
@@ -111,7 +134,11 @@ impl StoreManager {
         String::from_utf8(buf).unwrap()
     }
 
-    pub fn find_executions(&self, command_hash: &str, i18n: &crate::i18n::I18n) -> Result<Vec<CommandExecution>> {
+    pub fn find_executions(
+        &self,
+        command_hash: &str,
+        i18n: &crate::i18n::I18n,
+    ) -> Result<Vec<CommandExecution>> {
         let record_dir = self.base_dir.join("records").join(command_hash);
 
         if !record_dir.exists() {
@@ -125,8 +152,13 @@ impl StoreManager {
             let path = entry.path();
 
             if path.extension().and_then(|s| s.to_str()) == Some("json")
-                && path.file_name().unwrap().to_str().unwrap().starts_with("meta_") {
-
+                && path
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("meta_")
+            {
                 if let Ok(execution) = self.load_execution_from_meta(&path, i18n) {
                     executions.push(execution);
                 }
@@ -137,7 +169,11 @@ impl StoreManager {
         Ok(executions)
     }
 
-    fn load_execution_from_meta(&self, meta_path: &Path, i18n: &crate::i18n::I18n) -> Result<CommandExecution> {
+    fn load_execution_from_meta(
+        &self,
+        meta_path: &Path,
+        i18n: &crate::i18n::I18n,
+    ) -> Result<CommandExecution> {
         let record: CommandRecord = serde_json::from_reader(fs::File::open(meta_path)?)?;
 
         let timestamp = record.timestamp.timestamp();
@@ -146,13 +182,17 @@ impl StoreManager {
         let stdout_path = record_dir.join(format!("stdout_{}.txt", timestamp));
         let stderr_path = record_dir.join(format!("stderr_{}.txt", timestamp));
 
-        let stdout = fs::read_to_string(&stdout_path)
-            .unwrap_or_else(|_| i18n.t("error_read_stdout"));
+        let stdout =
+            fs::read_to_string(&stdout_path).unwrap_or_else(|_| i18n.t("error_read_stdout"));
 
-        let stderr = fs::read_to_string(&stderr_path)
-            .unwrap_or_else(|_| i18n.t("error_read_stderr"));
+        let stderr =
+            fs::read_to_string(&stderr_path).unwrap_or_else(|_| i18n.t("error_read_stderr"));
 
-        Ok(CommandExecution { record, stdout, stderr })
+        Ok(CommandExecution {
+            record,
+            stdout,
+            stderr,
+        })
     }
 
     fn update_index(&self, record: &CommandRecord, i18n: &crate::i18n::I18n) -> Result<()> {
@@ -173,7 +213,8 @@ impl StoreManager {
         entries.push(record.clone());
 
         // Apply retention days limit
-        let cutoff_date = Utc::now() - Duration::days(self.config.storage.max_retention_days as i64);
+        let cutoff_date =
+            Utc::now() - Duration::days(self.config.storage.max_retention_days as i64);
         entries.retain(|r| r.timestamp > cutoff_date);
 
         entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
@@ -184,8 +225,13 @@ impl StoreManager {
         Ok(())
     }
 
-    fn check_and_archive(&self, entries: &mut Vec<CommandRecord>, i18n: &crate::i18n::I18n) -> Result<()> {
-        let cutoff_date = Utc::now() - Duration::days(self.config.storage.max_retention_days as i64);
+    fn check_and_archive(
+        &self,
+        entries: &mut Vec<CommandRecord>,
+        i18n: &crate::i18n::I18n,
+    ) -> Result<()> {
+        let cutoff_date =
+            Utc::now() - Duration::days(self.config.storage.max_retention_days as i64);
 
         let to_archive: Vec<CommandRecord> = entries
             .iter()
@@ -195,7 +241,8 @@ impl StoreManager {
 
         if !to_archive.is_empty() {
             // Group by year for archiving
-            let mut by_year: std::collections::HashMap<u32, Vec<CommandRecord>> = std::collections::HashMap::new();
+            let mut by_year: std::collections::HashMap<u32, Vec<CommandRecord>> =
+                std::collections::HashMap::new();
 
             for record in to_archive {
                 let year = record.timestamp.year() as u32;
@@ -209,7 +256,8 @@ impl StoreManager {
 
                 if archive_path.exists() {
                     if let Ok(content) = fs::read_to_string(&archive_path) {
-                        existing_records = serde_json::from_str(&content).unwrap_or_else(|_| Vec::new());
+                        existing_records =
+                            serde_json::from_str(&content).unwrap_or_else(|_| Vec::new());
                     }
                 }
 
@@ -256,7 +304,9 @@ impl StoreManager {
             }
             let file_str = file_path.to_string_lossy();
             let target_str = target_path.to_string_lossy();
-            if record.command.contains(file_str.as_ref()) || record.command.contains(target_str.as_ref()) {
+            if record.command.contains(file_str.as_ref())
+                || record.command.contains(target_str.as_ref())
+            {
                 matched = true;
             }
             if let Some(rel_path) = pathdiff::diff_paths(file_path, &record.working_dir) {
@@ -281,10 +331,15 @@ impl StoreManager {
         let mut existing: Vec<CommandRecord> = if archive_path.exists() {
             if let Ok(content) = fs::read_to_string(&archive_path) {
                 serde_json::from_str(&content).unwrap_or_default()
-            } else { Vec::new() }
-        } else { Vec::new() };
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
 
-        let mut seen: std::collections::HashSet<String> = existing.iter().map(|r| r.record_id.clone()).collect();
+        let mut seen: std::collections::HashSet<String> =
+            existing.iter().map(|r| r.record_id.clone()).collect();
         for r in to_backup {
             if seen.insert(r.record_id.clone()) {
                 existing.push(r);
@@ -314,9 +369,14 @@ impl StoreManager {
             for nc in needle.chars() {
                 let mut found = false;
                 for hc in it.by_ref() {
-                    if nc == hc { found = true; break; }
+                    if nc == hc {
+                        found = true;
+                        break;
+                    }
                 }
-                if !found { return false; }
+                if !found {
+                    return false;
+                }
             }
             true
         }
@@ -357,8 +417,9 @@ impl StoreManager {
             let file_str = file_path.to_string_lossy();
             let target_str = target_path.to_string_lossy();
 
-            if record.command.contains(file_str.as_ref()) ||
-               record.command.contains(target_str.as_ref()) {
+            if record.command.contains(file_str.as_ref())
+                || record.command.contains(target_str.as_ref())
+            {
                 should_clean = true;
             }
 
@@ -373,10 +434,16 @@ impl StoreManager {
             if should_clean {
                 self.clean_record(&record)?;
                 cleaned += 1;
-                println!("{}", i18n.t_format("clean_record", &[
-            &record.command,
-            &record.timestamp.format("%Y-%m-%d %H:%M:%S").to_string()
-        ]));
+                println!(
+                    "{}",
+                    i18n.t_format(
+                        "clean_record",
+                        &[
+                            &record.command,
+                            &record.timestamp.format("%Y-%m-%d %H:%M:%S").to_string()
+                        ]
+                    )
+                );
             }
         }
 
@@ -401,7 +468,11 @@ impl StoreManager {
         Ok(result)
     }
 
-    fn extract_files_from_command(&self, command: &str, files: &mut std::collections::HashSet<PathBuf>) {
+    fn extract_files_from_command(
+        &self,
+        command: &str,
+        files: &mut std::collections::HashSet<PathBuf>,
+    ) {
         // Simple file path extraction logic
         let tokens: Vec<&str> = command.split_whitespace().collect();
 
@@ -409,7 +480,8 @@ impl StoreManager {
             let path = PathBuf::from(token);
 
             // If it looks like a file path (contains / or . extension)
-            if token.contains('/') || path.extension().is_some() || token == "ls" || token == "cat" {
+            if token.contains('/') || path.extension().is_some() || token == "ls" || token == "cat"
+            {
                 if path.exists() {
                     if let Ok(abs_path) = fs::canonicalize(&path) {
                         files.insert(abs_path);
@@ -438,9 +510,7 @@ impl StoreManager {
     }
 
     fn clean_record(&self, record: &CommandRecord) -> Result<()> {
-        let record_dir = self.base_dir
-            .join("records")
-            .join(&record.command_hash);
+        let record_dir = self.base_dir.join("records").join(&record.command_hash);
 
         let timestamp = record.timestamp.timestamp();
         let meta_path = record_dir.join(format!("meta_{}.json", timestamp));
@@ -469,9 +539,16 @@ impl StoreManager {
                         let path = entry.path();
 
                         if path.extension().and_then(|s| s.to_str()) == Some("json")
-                            && path.file_name().unwrap().to_str().unwrap().starts_with("meta_") {
-
-                            if let Ok(record) = serde_json::from_reader::<_, CommandRecord>(fs::File::open(&path)?) {
+                            && path
+                                .file_name()
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .starts_with("meta_")
+                        {
+                            if let Ok(record) =
+                                serde_json::from_reader::<_, CommandRecord>(fs::File::open(&path)?)
+                            {
                                 all_records.push(record);
                             }
                         }

@@ -18,6 +18,18 @@ dt lets you run shell commands, record their outputs over time, and compare resu
 - Options:
   - `-d, --diff-code <CODE>`: After recording, immediately show a diff with the specified short code.
 
+### Shell tip: handle commands with pipes
+
+When a command includes pipes (`|`), redirection (`>`, `<`), or logical operators (`&&`, `||`), wrap the entire command in single or double quotes so the outer shell does not pre-parse it.
+
+```bash
+# Recommended
+dt run 'ls -l | wc'
+
+# Incorrect: outer shell captures the pipeline first
+dt run ls -l | wc
+```
+
 `dt diff [OPTIONS] [COMMAND]`
 - Interactive selection and comparison of historical runs.
 - Options:
