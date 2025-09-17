@@ -35,6 +35,11 @@ dt run ls -l | wc
 - Options:
   - `--max-shown <N>`: Limit selector viewport rows.
 
+`dt ls [QUERY] [--json]`
+- Non-interactive listing of stored command runs, sorted by most recent.
+- Accepts optional substring or subsequence `QUERY` filters; omit to show all.
+- Use `--json` for machine-readable output (records including timestamps and short codes).
+
 `dt clean <SUBCOMMAND>`
 - Clean records by search, by file, or all.
 - Subcommands:
