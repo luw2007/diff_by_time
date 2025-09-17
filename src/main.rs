@@ -643,6 +643,7 @@ fn print_help(i18n: &I18n) {
         println!("{}", i18n.t("help_label_commands"));
         println!("  {}    {}", "run".green(), i18n.t("help_run"));
         println!("  {}   {}", "diff".green(), i18n.t("help_diff"));
+        println!("  {}     {}", "ls".green(), i18n.t("help_ls"));
         println!("  {}  {}", "clean".green(), i18n.t("help_clean"));
         println!(
             "  {}   Print this message or the help of the given subcommand(s)",
@@ -653,6 +654,7 @@ fn print_help(i18n: &I18n) {
             i18n.t_format("help_tip_run_diff_code", &[&i18n.t("help_run_diff_code")])
         );
         println!("{}", i18n.t("help_pipeline_tip"));
+        println!("{}", i18n.t("help_subcommand_more"));
         println!();
         println!("{}", i18n.t("help_label_options"));
         println!("  -h, --help  Print help");
@@ -740,6 +742,18 @@ fn print_help(i18n: &I18n) {
                 println!("  -h, --help                   Print help");
                 println!();
                 println!("{}", i18n.t("help_pipeline_tip"));
+            }
+            "ls" | "list" => {
+                println!("{}", i18n.t("help_ls"));
+                println!();
+                println!("{} dt ls [QUERY] [--json]", i18n.t("help_label_usage"));
+                println!();
+                println!("{}", i18n.t("help_label_arguments"));
+                println!("  [QUERY]  {}", i18n.t("help_ls_query"));
+                println!();
+                println!("{}", i18n.t("help_label_options"));
+                println!("      --json  {}", i18n.t("help_ls_json"));
+                println!("  -h, --help  Print help");
             }
             "clean" => {
                 println!("{}", i18n.t("help_clean"));

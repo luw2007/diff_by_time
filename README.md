@@ -50,6 +50,8 @@ dt run ls -l | wc
   - All deletes require confirmation: type `YES`.
   - Type `ALL` to confirm and skip further confirmations during this dt process (session-wide).
 
+Run `dt <COMMAND> --help` to see detailed usage for any subcommand.
+
 ## Features
 
 - Skim‑style fuzzy search for interactive selection (no external `fzf` required)

@@ -50,6 +50,10 @@ impl I18n {
             "help_tip_run_diff_code".to_string(),
             "Tip: dt run supports -d, --diff-code <CODE> — {0}".to_string(),
         );
+        en.insert(
+            "help_subcommand_more".to_string(),
+            "Run `dt <COMMAND> --help` for more details on each subcommand.".to_string(),
+        );
         // Legacy alias notices
         // Config help
         en.insert(
@@ -375,6 +379,10 @@ impl I18n {
         zh.insert(
             "help_tip_run_diff_code".to_string(),
             "提示：dt run 支持 -d, --diff-code <CODE> — {0}".to_string(),
+        );
+        zh.insert(
+            "help_subcommand_more".to_string(),
+            "运行 `dt <命令> --help` 查看各子命令的详细说明。".to_string(),
         );
         // Config help
         zh.insert(
