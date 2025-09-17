@@ -11,6 +11,8 @@ pub struct CommandRecord {
     pub exit_code: i32,         // Exit code
     pub duration_ms: u64,        // Execution duration (milliseconds)
     pub record_id: String,      // Record unique identifier
+    #[serde(default)]
+    pub short_code: Option<String>, // Short code for quick reference (per-command)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -24,6 +24,7 @@ cp "${TARGET_DIR}/${BINARY_NAME}" "package/${PACKAGE_NAME}/"
 echo "📚 复制文档..."
 cp "README.md" "package/${PACKAGE_NAME}/" 2>/dev/null || echo "⚠️  README.md 不存在"
 cp "LICENSE" "package/${PACKAGE_NAME}/" 2>/dev/null || echo "⚠️  LICENSE 不存在"
+cp "THIRD_PARTY_NOTICES.md" "package/${PACKAGE_NAME}/" 2>/dev/null || echo "⚠️  THIRD_PARTY_NOTICES.md 不存在"
 
 # 创建使用说明（根据当前配置的语言）
 detect_language() {
@@ -80,6 +81,9 @@ dt run "ls -la"
 dt run "ls | head -5"
 dt run "ps aux | grep dt"
 dt run "find . -name '*.rs' | wc -l"
+
+# 执行后立即与短码对比（-d 等同于 --diff-code）
+dt run -d ab "ls | head -5"
 ```
 
 ### 比较命令输出差异
@@ -95,8 +99,8 @@ dt list
 
 ### 清理历史记录
 ```bash
-# 按命令前缀清理
-dt clean prefix "ls"
+# 按命令搜索清理
+dt clean search "ls"
 
 # 按文件清理
 dt clean file /path/to/file
@@ -119,15 +123,19 @@ max_history_shown = 10     # 最多显示历史记录数
 language = "auto"          # 语言设置 (auto/en/zh)
 ```
 
+## 许可证
+
+本软件包含第三方组件（例如：fuzzy-matcher，Skim 风格算法），相关许可信息见包内的 `THIRD_PARTY_NOTICES.md`。
+
 ## 特性
 
 - ✅ 支持简单命令和管道命令
 - ✅ 彩色diff输出
 - ✅ 自动归档历史数据
 - ✅ 多语言支持（中文/英文）
-- ✅ 日期过滤选择（类似fzf）
+ - ✅ 日期过滤选择（skim风格）
 - ✅ 配置文件管理
-- ✅ 按文件和命令前缀清理
+- ✅ 按文件和命令搜索清理
 EOF
 else
     cat > "package/${PACKAGE_NAME}/USAGE.md" << 'EOF'
@@ -156,6 +164,9 @@ dt run "ls -la"
 dt run "ls | head -5"
 dt run "ps aux | grep dt"
 dt run "find . -name '*.rs' | wc -l"
+
+# Run and immediately diff with a short code (-d is alias for --diff-code)
+dt run -d ab "ls | head -5"
 ```
 
 ### Compare command output differences
@@ -171,8 +182,8 @@ dt list
 
 ### Clean history records
 ```bash
-# Clean by command prefix
-dt clean prefix "ls"
+# Clean by command search
+dt clean search "ls"
 
 # Clean by file
 dt clean file /path/to/file
@@ -195,15 +206,19 @@ max_history_shown = 10     # Maximum history records to show
 language = "auto"          # Language setting (auto/en/zh)
 ```
 
+## Licenses
+
+This software includes third-party components (e.g., fuzzy-matcher with Skim-style algorithm). See `THIRD_PARTY_NOTICES.md` in the package for license details.
+
 ## Features
 
 - ✅ Support for simple commands and piped commands
 - ✅ Colored diff output
 - ✅ Auto archive historical data
 - ✅ Multi-language support (Chinese/English)
-- ✅ Date filtering selection (fzf-like)
+- ✅ Date filtering selection (skim-like)
 - ✅ Configuration file management
-- ✅ Clean by file and command prefix
+- ✅ Clean by file and command search
 EOF
 fi
 
@@ -265,6 +280,7 @@ echo ""
 echo "📂 内容包含："
 echo "  - ${BINARY_NAME} 二进制文件"
 echo "  - USAGE.md 使用说明"
+echo "  - THIRD_PARTY_NOTICES.md 第三方许可证说明"
 echo "  - install.sh 安装脚本"
 echo "  - README.md (如果存在)"
 echo "  - LICENSE (如果存在)"

@@ -8,10 +8,10 @@ mod fuzzy_matcher;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use std::io::{self, Write};
 use anyhow::Result;
 use colored::*;
 use sha2::{Sha256, Digest};
-use hex;
 
 use executor::CommandExecutor;
 use store_manager::StoreManager;
@@ -34,12 +34,15 @@ enum Commands {
         /// Command to execute (wrap commands with pipes in quotes)
         #[arg(required = true)]
         command: String,
+        /// Diff with a specific short code after run
+        #[arg(long = "diff-code", short = 'd')]
+        diff_code: Option<String>,
     },
     /// Compare command output differences
     Diff {
         /// Command to compare (wrap commands with pipes in quotes)
-        #[arg(required = true)]
-        command: String,
+        #[arg()]
+        command: Option<String>,
         /// Maximum number of selection records to display [default: 20]
         #[arg(long)]
         max_shown: Option<usize>,
@@ -50,23 +53,15 @@ enum Commands {
         #[command(subcommand)]
         mode: CleanMode,
     },
-    /// List all history records
-    List {
-        /// Do not merge records with same commands [default: merge]
-        #[arg(long)]
-        no_merge: bool,
-        /// Filter command string
-        #[arg()]
-        filter: Option<String>,
-    },
 }
 
 #[derive(Subcommand)]
 enum CleanMode {
-    /// Clean by command prefix
-    Prefix {
-        /// Command prefix
-        prefix: String,
+    /// Clean by fuzzy search (command)
+    #[command(alias = "prefix")] // backward-compat alias
+    Search {
+        /// Search query (optional; if omitted, opens an interactive selector)
+        query: Option<String>,
     },
     /// Clean by file
     File {
@@ -98,6 +93,34 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // If user typed `dt run` without a command, show the run help instead of an error.
+    if args.len() == 2 && args[1] == "run" {
+        let config = Config::new()?;
+        let i18n = I18n::new(&config.get_effective_language());
+        print_help(&i18n);
+        return Ok(());
+    }
+
+    // Backward-compat: route `dt list` to interactive diff selector
+    if args.len() >= 2 && args[1] == "list" {
+        let config = Config::new()?;
+        let i18n = I18n::new(&config.get_effective_language());
+        let store = StoreManager::new_with_config(config.clone(), &i18n)?;
+
+        println!("{}", i18n.t("list_removed_notice").yellow());
+
+        // Resolve TUI settings (env overrides config if present)
+        let tui_simple = std::env::var("DT_TUI").ok()
+            .map(|v| { let v = v.to_lowercase(); v == "0" || v == "false" || v == "simple" })
+            .unwrap_or_else(|| config.display.tui_mode.to_lowercase() == "simple");
+        let use_alt_screen = std::env::var("DT_ALT_SCREEN").ok()
+            .map(|v| { let v = v.to_lowercase(); !(v == "0" || v == "false") })
+            .unwrap_or(config.display.alt_screen);
+
+        Differ::command_then_diff_flow(&store, &i18n, tui_simple, use_alt_screen, None)?;
+        return Ok(());
+    }
+
     // Normal parsing and command processing
     let cli = Cli::parse();
     let config = Config::new()?;
@@ -105,11 +128,13 @@ fn main() -> Result<()> {
     let store = StoreManager::new_with_config(config.clone(), &i18n)?;
 
     match cli.command {
-        Commands::Run { command } => {
+        Commands::Run { command, diff_code } => {
             let command_str = command;
-            let _command_hash = hash_command(&command_str);
+            let command_hash = hash_command(&command_str);
 
-            let execution = CommandExecutor::execute(&command_str, &i18n)?;
+            let mut execution = CommandExecutor::execute(&command_str, &i18n)?;
+            // Assign minimal unused short code for this command
+            store.assign_short_code(&mut execution.record, &i18n)?;
 
             println!("{}", i18n.t_format("command_completed", &[&execution.record.exit_code.to_string()]).green().bold());
             println!("{}: {}ms", i18n.t("execution_time").yellow(), execution.record.duration_ms.to_string().green());
@@ -126,151 +151,220 @@ fn main() -> Result<()> {
 
             store.save_execution(&execution, &i18n)?;
             println!("{}", i18n.t("result_saved").green().bold());
+            if let Some(code) = &execution.record.short_code {
+                println!("{}", i18n.t_format("assigned_short_code", &[code]).yellow());
+                println!("{}", i18n.t_format("hint_diff_with_code", &[code]).dimmed());
+            }
+
+            // If a diff target code is provided, show diff immediately
+            if let Some(code) = diff_code {
+                let executions = store.find_executions(&command_hash, &i18n)?;
+                // Find target execution with the given short code, excluding the just-created record
+                if let Some(target) = executions
+                    .into_iter()
+                    .filter(|e| e.record.record_id != execution.record.record_id)
+                    .find(|e| e.record.short_code.as_deref() == Some(code.as_str()))
+                {
+                    let mut pair = vec![target, execution.clone()];
+                    pair.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
+                    if let Some(diff_output) = Differ::diff_executions(&pair, &i18n) {
+                        print!("{}", diff_output);
+                    }
+                } else {
+                    println!("{}", i18n.t_format("diff_code_not_found", &[&code]));
+                }
+            }
         }
-        Commands::Diff { command, max_shown: _max_shown } => {
-            let command_str = command;
-            let command_hash = hash_command(&command_str);
+        Commands::Diff { command, max_shown } => {
+            // Resolve TUI settings (env overrides config if present)
+            let tui_simple = std::env::var("DT_TUI").ok()
+                .map(|v| { let v = v.to_lowercase(); v == "0" || v == "false" || v == "simple" })
+                .unwrap_or_else(|| config.display.tui_mode.to_lowercase() == "simple");
+            let use_alt_screen = std::env::var("DT_ALT_SCREEN").ok()
+                .map(|v| { let v = v.to_lowercase(); !(v == "0" || v == "false") })
+                .unwrap_or(config.display.alt_screen);
 
-            let mut executions = store.find_executions(&command_hash, &i18n)?;
-
-            if executions.len() < 2 {
-                println!("{}", i18n.t("need_at_least_two").red().bold());
-                return Ok(());
-            }
-
-            if executions.len() > 2 {
-                // Resolve TUI settings (env overrides config if present)
-                let tui_simple = std::env::var("DT_TUI").ok()
-                    .map(|v| { let v = v.to_lowercase(); v == "0" || v == "false" || v == "simple" })
-                    .unwrap_or_else(|| config.display.tui_mode.to_lowercase() == "simple");
-                let use_alt_screen = std::env::var("DT_ALT_SCREEN").ok()
-                    .map(|v| { let v = v.to_lowercase(); !(v == "0" || v == "false") })
-                    .unwrap_or(config.display.alt_screen);
-
-                let hash_clone = command_hash.clone();
-                let store_ref = &store;
-                executions = Differ::interactive_select_executions_with_loader(
-                    &executions,
-                    &i18n,
-                    tui_simple,
-                    use_alt_screen,
-                    || {
-                        // Reload latest executions from index on each input
-                        store_ref.find_executions(&hash_clone, &i18n).unwrap_or_default()
-                    },
-                );
-            }
-
-            if let Some(diff_output) = Differ::diff_executions(&executions, &i18n) {
-                print!("{}", diff_output);
+            if let Some(command_str) = command {
+                let command_hash = hash_command(&command_str);
+                let mut executions = store.find_executions(&command_hash, &i18n)?;
+                if executions.len() < 2 {
+                    println!("{}", i18n.t("need_at_least_two").red().bold());
+                    return Ok(());
+                }
+                if executions.len() > 2 {
+                    let hash_clone = command_hash.clone();
+                    let store_ref = &store;
+                    executions = Differ::interactive_select_executions_with_loader(
+                        &executions,
+                        &i18n,
+                        tui_simple,
+                        use_alt_screen,
+                        max_shown,
+                        || {
+                            store_ref.find_executions(&hash_clone, &i18n).unwrap_or_default()
+                        },
+                    );
+                }
+                if let Some(diff_output) = Differ::diff_executions(&executions, &i18n) {
+                    print!("{}", diff_output);
+                }
+            } else {
+                // No command provided: open command selector, then enter diff selection flow.
+                Differ::command_then_diff_flow(&store, &i18n, tui_simple, use_alt_screen, max_shown)?;
             }
         }
         Commands::Clean { mode } => {
+            // Global flag for this invocation: if user typed ALL once, skip further confirms
+            let mut skip_confirm_all = false;
             match mode {
-                CleanMode::Prefix { prefix } => {
-                    let cleaned = store.clean_by_prefix(&prefix, &i18n)?;
-                    println!("{}", i18n.t_format("cleaned_records", &[&cleaned.to_string()]));
+                CleanMode::Search { query } => {
+                    // Resolve TUI settings
+                    let tui_simple = std::env::var("DT_TUI").ok()
+                        .map(|v| { let v = v.to_lowercase(); v == "0" || v == "false" || v == "simple" })
+                        .unwrap_or_else(|| config.display.tui_mode.to_lowercase() == "simple");
+                    let use_alt_screen = std::env::var("DT_ALT_SCREEN").ok()
+                        .map(|v| { let v = v.to_lowercase(); !(v == "0" || v == "false") })
+                        .unwrap_or(config.display.alt_screen);
+
+                    let chosen_query = if let Some(q) = query { Some(q) } else {
+                        Differ::select_prefix_for_clean(&store, &i18n, tui_simple, use_alt_screen, None)?
+                    };
+                    if let Some(query_str) = chosen_query {
+                        // Preview count and confirm
+                        let all_records = store.get_all_records()?;
+                        let count = {
+                            let q = query_str.trim();
+                            if q.is_empty() { 0 } else {
+                                let ql = q.to_lowercase();
+                                fn is_subsequence(needle: &str, haystack: &str) -> bool {
+                                    let mut it = haystack.chars();
+                                    for nc in needle.chars() {
+                                        let mut found = false;
+                                        for hc in it.by_ref() { if nc == hc { found = true; break; } }
+                                        if !found { return false; }
+                                    }
+                                    true
+                                }
+                                all_records.iter().filter(|r| {
+                                    let cmd = r.command.to_lowercase();
+                                    cmd.contains(&ql) || is_subsequence(&ql, &cmd)
+                                }).count()
+                            }
+                        };
+                        if count == 0 {
+                            println!("{}", i18n.t("delete_nothing").yellow());
+                            return Ok(());
+                        }
+                        println!("{}", i18n.t_format("delete_summary_query", &[&count.to_string(), &query_str]));
+                        if !confirm_delete(&i18n, &mut skip_confirm_all)? { println!("{}", i18n.t("confirm_clean_all_aborted").yellow()); return Ok(()); }
+                        // Clean by search query: substring or simple fuzzy (subsequence)
+                        let cleaned = store.clean_by_query(&query_str, &i18n)?;
+                        println!("{}", i18n.t_format("cleaned_records", &[&cleaned.to_string()]));
+                    }
                 }
                 CleanMode::File { file } => {
                     if let Some(file_path) = file {
+                        // Preview and confirm
+                        let all_records = store.get_all_records()?;
+                        let target_path = match std::fs::canonicalize(&file_path) { Ok(p) => p, Err(_) => file_path.clone() };
+                        let count = all_records.iter().filter(|record| {
+                            let mut should = false;
+                            if record.working_dir == target_path { should = true; }
+                            let file_str = file_path.to_string_lossy();
+                            let target_str = target_path.to_string_lossy();
+                            if record.command.contains(file_str.as_ref()) || record.command.contains(target_str.as_ref()) { should = true; }
+                            if let Some(rel_path) = pathdiff::diff_paths(&file_path, &record.working_dir) {
+                                let rel_str = rel_path.to_string_lossy();
+                                if record.command.contains(rel_str.as_ref()) { should = true; }
+                            }
+                            should
+                        }).count();
+                        if count == 0 {
+                            println!("{}", i18n.t("delete_nothing").yellow());
+                            return Ok(());
+                        }
+                        println!("{}", i18n.t_format("delete_summary_file", &[&count.to_string(), &file_path.display().to_string()]));
+                        if !confirm_delete(&i18n, &mut skip_confirm_all)? { println!("{}", i18n.t("confirm_clean_all_aborted").yellow()); return Ok(()); }
                         let cleaned = store.clean_by_file(&file_path, &i18n)?;
                         println!("{}", i18n.t_format("cleaned_records", &[&cleaned.to_string()]));
                     } else {
+                        // Resolve TUI settings
+                        let tui_simple = std::env::var("DT_TUI").ok()
+                            .map(|v| { let v = v.to_lowercase(); v == "0" || v == "false" || v == "simple" })
+                            .unwrap_or_else(|| config.display.tui_mode.to_lowercase() == "simple");
+                        let use_alt_screen = std::env::var("DT_ALT_SCREEN").ok()
+                            .map(|v| { let v = v.to_lowercase(); !(v == "0" || v == "false") })
+                            .unwrap_or(config.display.alt_screen);
+
                         let files = store.get_related_files()?;
                         if files.is_empty() {
                             println!("{}", i18n.t("no_related_files"));
-                        } else {
-                            println!("{}", i18n.t("found_related_files"));
-                            for (i, file_path) in files.iter().enumerate() {
-                                println!("  {}: {}", i + 1, file_path.display());
-                            }
-                            println!("\n{}", i18n.t("clean_command"));
-                            println!("  {}", i18n.t("clean_file_example"));
+                        } else if let Some(chosen) = Differ::select_file_for_clean(&files, &i18n, tui_simple, use_alt_screen, None)? {
+                            // Preview and confirm
+                            let all_records = store.get_all_records()?;
+                            let target_path = match std::fs::canonicalize(&chosen) { Ok(p) => p, Err(_) => chosen.clone() };
+                            let count = all_records.iter().filter(|record| {
+                                let mut should = false;
+                                if record.working_dir == target_path { should = true; }
+                                let file_str = chosen.to_string_lossy();
+                                let target_str = target_path.to_string_lossy();
+                                if record.command.contains(file_str.as_ref()) || record.command.contains(target_str.as_ref()) { should = true; }
+                                if let Some(rel_path) = pathdiff::diff_paths(&chosen, &record.working_dir) {
+                                    let rel_str = rel_path.to_string_lossy();
+                                    if record.command.contains(rel_str.as_ref()) { should = true; }
+                                }
+                                should
+                            }).count();
+                            if count == 0 { println!("{}", i18n.t("delete_nothing").yellow()); return Ok(()); }
+                            println!("{}", i18n.t_format("delete_summary_file", &[&count.to_string(), &chosen.display().to_string()]));
+                            if !confirm_delete(&i18n, &mut skip_confirm_all)? { println!("{}", i18n.t("confirm_clean_all_aborted").yellow()); return Ok(()); }
+                            let cleaned = store.clean_by_file(&chosen, &i18n)?;
+                            println!("{}", i18n.t_format("cleaned_records", &[&cleaned.to_string()]));
                         }
                     }
                 }
                 CleanMode::All => {
+                    // Require explicit confirmation before destructive action
+                    println!("{}", i18n.t("confirm_clean_all_title").red().bold());
+                    // Show summary: how many different commands and total records
+                    let all_records = store.get_all_records()?;
+                    let mut unique = std::collections::HashSet::new();
+                    for r in &all_records { unique.insert(r.command_hash.clone()); }
+                    println!(
+                        "{}",
+                        i18n.t_format(
+                            "clean_all_summary",
+                            &[&unique.len().to_string(), &all_records.len().to_string()]
+                        )
+                    );
+                    if !confirm_delete(&i18n, &mut skip_confirm_all)? {
+                        println!("{}", i18n.t("confirm_clean_all_aborted").yellow());
+                        return Ok(());
+                    }
+
                     let _cleaned = store.clean_all(&i18n)?;
                     println!("{}", i18n.t("cleaned_all"));
-                }
-            }
-        }
-        Commands::List { no_merge, filter } => {
-            let records = store.get_all_records()?;
-
-            if records.is_empty() {
-                println!("{}", i18n.t("no_records").yellow());
-                return Ok(());
-            }
-
-            // Apply filtering
-            let filtered_records = if let Some(filter_str) = &filter {
-                records
-                    .into_iter()
-                    .filter(|record| record.command.to_lowercase().contains(&filter_str.to_lowercase()))
-                    .collect()
-            } else {
-                records
-            };
-
-            if filtered_records.is_empty() {
-                println!("{}", i18n.t("no_records").yellow());
-                return Ok(());
-            }
-
-            if !no_merge {
-                // Merge records with same commands
-                let mut grouped: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
-
-                for record in filtered_records {
-                    grouped.entry(record.command.clone()).or_insert_with(Vec::new).push(record);
-                }
-
-                println!("{}", i18n.t("history_records").cyan().bold());
-                println!("{}", i18n.t_format("merged_commands", &[&grouped.len().to_string()]));
-
-                for (_command, mut records) in grouped {
-                    records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-                    let latest = &records[0];
-                    let count = records.len();
-
-                    if count == 1 {
-                        println!("{}", i18n.t_format("single_record", &[
-                            &latest.command,
-                            &latest.exit_code.to_string(),
-                            &latest.duration_ms.to_string(),
-                            &latest.timestamp.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string()
-                        ]));
-                    } else {
-                        let earliest = &records[records.len() - 1];
-                        println!("{}", i18n.t_format("multiple_records", &[
-                            &latest.command,
-                            &count.to_string(),
-                            &latest.exit_code.to_string(),
-                            &latest.duration_ms.to_string(),
-                            &earliest.timestamp.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string(),
-                            &latest.timestamp.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string()
-                        ]));
-                    }
-                }
-            } else {
-                // Don't merge, show all records
-                println!("{}", i18n.t("history_records").cyan().bold());
-                println!("{}", i18n.t_format("showing_all", &[&filtered_records.len().to_string()]));
-
-                for record in filtered_records {
-                    println!("{}", i18n.t_format("all_records", &[
-                        &record.command,
-                        &record.exit_code.to_string(),
-                        &record.duration_ms.to_string(),
-                        &record.timestamp.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string()
-                    ]));
                 }
             }
         }
     }
 
     Ok(())
+}
+
+fn confirm_delete(i18n: &I18n, skip_confirm_all: &mut bool) -> Result<bool> {
+    if *skip_confirm_all {
+        return Ok(true);
+    }
+    print!("{}", i18n.t("confirm_delete_prompt").yellow());
+    io::stdout().flush().ok();
+    let mut input = String::new();
+    if io::stdin().read_line(&mut input).is_err() {
+        return Ok(false);
+    }
+    let trimmed = input.trim().to_lowercase();
+    if trimmed == "all" { *skip_confirm_all = true; return Ok(true); }
+    Ok(trimmed == "yes")
 }
 
 fn format_command(command: &str) -> String {
@@ -332,16 +426,16 @@ fn print_help(i18n: &I18n) {
         // Main help
         println!("{}", i18n.t("help_about"));
         println!();
-        println!("Usage: dt <COMMAND>");
+        println!("{} dt <COMMAND>", i18n.t("help_label_usage"));
         println!();
-        println!("Commands:");
+        println!("{}", i18n.t("help_label_commands"));
         println!("  {}    {}", "run".green(), i18n.t("help_run"));
         println!("  {}   {}", "diff".green(), i18n.t("help_diff"));
         println!("  {}  {}", "clean".green(), i18n.t("help_clean"));
-        println!("  {}   {}", "list".green(), i18n.t("help_list"));
-        println!("  {}   {}", "help".green(), "Print this message or the help of the given subcommand(s)");
+        println!("  {}   Print this message or the help of the given subcommand(s)", "help".green());
+        println!("{}", i18n.t_format("help_tip_run_diff_code", &[&i18n.t("help_run_diff_code")]));
         println!();
-        println!("Options:");
+        println!("{}", i18n.t("help_label_options"));
         println!("  -h, --help  Print help");
         println!();
         println!("{}", i18n.t("help_config_section"));
@@ -351,62 +445,64 @@ fn print_help(i18n: &I18n) {
         // Clean subcommand help
         println!("{}", i18n.t("help_clean"));
         println!();
-        println!("Usage: dt clean <COMMAND>");
+        println!("{} dt clean <COMMAND>", i18n.t("help_label_usage"));
         println!();
-        println!("Commands:");
-        println!("  {}  {}", "prefix".green(), i18n.t("help_clean_prefix"));
+        println!("{}", i18n.t("help_label_commands"));
+        println!("  {}  {}", "search".green(), i18n.t("help_clean_search"));
+        println!("      {}", "(alias: prefix)".dimmed());
         println!("  {}    {}", "file".green(), i18n.t("help_clean_file"));
         println!("  {}     {}", "all".green(), i18n.t("help_clean_all"));
-        println!("  {}    {}", "help".green(), "Print this message or the help of the given subcommand(s)");
+        println!("  {}    Print this message or the help of the given subcommand(s)", "help".green());
         println!();
-        println!("Options:");
+        println!("{}", i18n.t("help_label_options"));
         println!("  -h, --help  Print help");
     } else if args.len() >= 3 && args[1] == "clean" {
         // Clean subcommand's subcommand help
         match args[2].as_str() {
-            "prefix" => {
-                println!("{}", i18n.t("help_clean_prefix"));
+            "search" | "prefix" => {
+                println!("{}", i18n.t("help_clean_search"));
                 println!();
-                println!("Usage: dt clean prefix <PREFIX>");
+                println!("{} dt clean search [QUERY]", i18n.t("help_label_usage"));
                 println!();
-                println!("Arguments:");
-                println!("  <PREFIX>  {}", i18n.t("help_clean_prefix_arg"));
+                println!("{}", i18n.t("help_label_arguments"));
+                println!("  [QUERY]  {}", i18n.t("help_clean_search_arg"));
                 println!();
-                println!("Options:");
+                println!("{}", i18n.t("help_label_options"));
                 println!("  -h, --help  Print help");
             }
             "file" => {
                 println!("{}", i18n.t("help_clean_file"));
                 println!();
-                println!("Usage: dt clean file [FILE]");
+                println!("{} dt clean file [FILE]", i18n.t("help_label_usage"));
                 println!();
-                println!("Arguments:");
+                println!("{}", i18n.t("help_label_arguments"));
                 println!("  [FILE]  {}", i18n.t("help_clean_file_arg"));
                 println!();
-                println!("Options:");
+                println!("{}", i18n.t("help_label_options"));
                 println!("  -h, --help  Print help");
             }
             "all" => {
                 println!("{}", i18n.t("help_clean_all"));
                 println!();
-                println!("Usage: dt clean all");
+                println!("{} dt clean all", i18n.t("help_label_usage"));
                 println!();
-                println!("Options:");
+                println!("{}", i18n.t("help_label_options"));
                 println!("  -h, --help  Print help");
             }
             _ => {
                 // Unknown subcommand, show clean main help
                 println!("{}", i18n.t("help_clean"));
                 println!();
-                println!("Usage: dt clean <COMMAND>");
+                println!("{} dt clean <COMMAND>", i18n.t("help_label_usage"));
                 println!();
-                println!("Commands:");
-                println!("  {}  {}", "prefix".green(), i18n.t("help_clean_prefix"));
+                println!("{}", i18n.t("help_label_commands"));
+                println!("  {}  {}", "search".green(), i18n.t("help_clean_search"));
+                println!("      {}", "(alias: prefix)".dimmed());
                 println!("  {}    {}", "file".green(), i18n.t("help_clean_file"));
                 println!("  {}     {}", "all".green(), i18n.t("help_clean_all"));
-                println!("  {}    {}", "help".green(), "Print this message or the help of the given subcommand(s)");
+                println!("  {}    Print this message or the help of the given subcommand(s)", "help".green());
                 println!();
-                println!("Options:");
+                println!("{}", i18n.t("help_label_options"));
                 println!("  -h, --help  Print help");
             }
         }
@@ -415,23 +511,24 @@ fn print_help(i18n: &I18n) {
             "run" => {
                 println!("{}", i18n.t("help_run"));
                 println!();
-                println!("Usage: dt run <COMMAND>");
+                println!("{} dt run <COMMAND>", i18n.t("help_label_usage"));
                 println!();
-                println!("Arguments:");
+                println!("{}", i18n.t("help_label_arguments"));
                 println!("  <COMMAND>  {}", i18n.t("help_run_command"));
                 println!();
-                println!("Options:");
+                println!("{}", i18n.t("help_label_options"));
+                println!("  -d, --diff-code <CODE>  {}", i18n.t("help_run_diff_code"));
                 println!("  -h, --help  Print help");
             }
             "diff" => {
                 println!("{}", i18n.t("help_diff"));
                 println!();
-                println!("Usage: dt diff [OPTIONS] <COMMAND>");
+                println!("{} dt diff [OPTIONS] [COMMAND]", i18n.t("help_label_usage"));
                 println!();
-                println!("Arguments:");
+                println!("{}", i18n.t("help_label_arguments"));
                 println!("  <COMMAND>  {}", i18n.t("help_diff_command"));
                 println!();
-                println!("Options:");
+                println!("{}", i18n.t("help_label_options"));
                 println!("      --max-shown <MAX_SHOWN>  {}", i18n.t("help_diff_max_shown"));
                 println!("  -h, --help                   Print help");
             }
@@ -441,40 +538,36 @@ fn print_help(i18n: &I18n) {
                 println!("Usage: dt clean <COMMAND>");
                 println!();
                 println!("Commands:");
-                println!("  {}  {}", "prefix".green(), i18n.t("help_clean_prefix"));
+                println!("  {}  {}", "search".green(), i18n.t("help_clean_search"));
+                println!("      {}", "(alias: prefix)".dimmed());
                 println!("  {}    {}", "file".green(), i18n.t("help_clean_file"));
                 println!("  {}     {}", "all".green(), i18n.t("help_clean_all"));
-                println!("  {}    {}", "help".green(), "Print this message or the help of the given subcommand(s)");
+                println!("  {}    Print this message or the help of the given subcommand(s)", "help".green());
                 println!();
                 println!("Options:");
                 println!("  -h, --help  Print help");
             }
             "list" => {
-                println!("{}", i18n.t("help_list"));
-                println!();
-                println!("Usage: dt list [OPTIONS] [FILTER]");
-                println!();
-                println!("Arguments:");
-                println!("  [FILTER]  {}", i18n.t("help_list_filter"));
+                println!("{}", i18n.t("list_removed_notice"));
+                println!("\nUsage: dt diff [OPTIONS] [COMMAND]");
                 println!();
                 println!("Options:");
-                println!("      --no-merge  {}", i18n.t("help_list_no_merge"));
-                println!("  -h, --help      Print help");
+                println!("      --max-shown <MAX_SHOWN>  {}", i18n.t("help_diff_max_shown"));
+                println!("  -h, --help                   Print help");
             }
             _ => {
                 // Unknown subcommand, show main help
                 println!("{}", i18n.t("help_about"));
                 println!();
-                println!("Usage: dt <COMMAND>");
+                println!("{} dt <COMMAND>", i18n.t("help_label_usage"));
                 println!();
-                println!("Commands:");
+                println!("{}", i18n.t("help_label_commands"));
                 println!("  {}    {}", "run".green(), i18n.t("help_run"));
                 println!("  {}   {}", "diff".green(), i18n.t("help_diff"));
                 println!("  {}  {}", "clean".green(), i18n.t("help_clean"));
-                println!("  {}   {}", "list".green(), i18n.t("help_list"));
-                println!("  {}   {}", "help".green(), "Print this message or the help of the given subcommand(s)");
+                println!("  {}   Print this message or the help of the given subcommand(s)", "help".green());
                 println!();
-                println!("Options:");
+                println!("{}", i18n.t("help_label_options"));
                 println!("  -h, --help  Print help");
             }
         }

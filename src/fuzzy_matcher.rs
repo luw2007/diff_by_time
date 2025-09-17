@@ -8,12 +8,12 @@ pub struct MatchResult {
     pub indices: Vec<usize>,
 }
 
-/// FZF-style fuzzy matcher
-pub struct FzfMatcher {
+/// Skim-style fuzzy matcher (no external fzf dependency)
+pub struct SkimMatcher {
     matcher: fuzzy_matcher::skim::SkimMatcherV2,
 }
 
-impl FzfMatcher {
+impl SkimMatcher {
     /// Create a new fuzzy matcher
     pub fn new() -> Self {
         Self {
@@ -156,7 +156,7 @@ impl FzfMatcher {
     }
 }
 
-impl Default for FzfMatcher {
+impl Default for SkimMatcher {
     fn default() -> Self {
         Self::new()
     }
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_fuzzy_matcher() {
-        let matcher = FzfMatcher::new();
+        let matcher = SkimMatcher::new();
 
         // Test exact match
         let pat = "test";
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn test_match_and_sort() {
-        let matcher = FzfMatcher::new();
+        let matcher = SkimMatcher::new();
         let items = vec![
             (1, "apple".to_string()),
             (2, "application".to_string()),
@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_highlight_matches() {
-        let matcher = FzfMatcher::new();
+        let matcher = SkimMatcher::new();
         let result = matcher.fuzzy_match("tst", "test").unwrap();
         let highlighted = matcher.highlight_matches("test", &result.indices);
 

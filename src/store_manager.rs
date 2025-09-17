@@ -2,8 +2,8 @@ use anyhow::{Result, Context};
 use std::fs;
 use std::path::{Path, PathBuf};
 use crate::storage::{CommandExecution, CommandRecord};
-use serde_json;
 use chrono::{Duration, Utc, Datelike};
+use std::collections::HashSet;
 
 pub struct StoreManager {
     base_dir: PathBuf,
@@ -52,6 +52,63 @@ impl StoreManager {
         self.update_index(&execution.record, i18n)?;
 
         Ok(())
+    }
+
+    /// Assign a minimal unused short code for the given record (per command hash).
+    /// Codes are bijective base62 with alphabet a-zA-Z0-9, starting from 1 => 'a'.
+    pub fn assign_short_code(&self, record: &mut CommandRecord, _i18n: &crate::i18n::I18n) -> Result<()> {
+        let record_dir = self.base_dir.join("records").join(&record.command_hash);
+
+        let mut used: HashSet<String> = HashSet::new();
+
+        if record_dir.exists() {
+            for entry in fs::read_dir(&record_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+
+                if path.extension().and_then(|s| s.to_str()) == Some("json")
+                    && path.file_name().unwrap().to_str().unwrap().starts_with("meta_")
+                {
+                    if let Ok(existing) = serde_json::from_reader::<_, CommandRecord>(fs::File::open(&path)?) {
+                        if let Some(code) = existing.short_code {
+                            used.insert(code);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Find minimal unused n starting from 1
+        let mut n: u64 = 1;
+        loop {
+            let code = Self::encode_bijective_base62(n);
+            if !used.contains(&code) {
+                record.short_code = Some(code);
+                break;
+            }
+            n += 1;
+        }
+
+        Ok(())
+    }
+
+    fn encode_bijective_base62(mut n: u64) -> String {
+        const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let base = ALPHABET.len() as u64; // 62
+        let mut buf: Vec<u8> = Vec::new();
+        while n > 0 {
+            let mut rem = n % base;
+            if rem == 0 {
+                rem = base;
+                n = n / base - 1;
+            } else {
+                n /= base;
+            }
+            let idx = (rem - 1) as usize;
+            buf.push(ALPHABET[idx]);
+        }
+        buf.reverse();
+        String::from_utf8(buf).unwrap()
     }
 
     pub fn find_executions(&self, command_hash: &str, i18n: &crate::i18n::I18n) -> Result<Vec<CommandExecution>> {
@@ -142,7 +199,7 @@ impl StoreManager {
 
             for record in to_archive {
                 let year = record.timestamp.year() as u32;
-                by_year.entry(year).or_insert_with(Vec::new).push(record);
+                by_year.entry(year).or_default().push(record);
             }
 
             // Save to yearly archive file
@@ -181,12 +238,34 @@ impl StoreManager {
         Ok(records)
     }
 
-    pub fn clean_by_prefix(&self, prefix: &str, i18n: &crate::i18n::I18n) -> Result<usize> {
+    pub fn clean_by_query(&self, query: &str, i18n: &crate::i18n::I18n) -> Result<usize> {
         let records = self.get_all_records()?;
         let mut cleaned = 0;
 
+        let q = query.trim();
+        if q.is_empty() {
+            return Ok(0);
+        }
+        let q_lower = q.to_lowercase();
+
+        // simple fuzzy: subsequence match (skim-like loose match) fallback
+        fn is_subsequence(needle: &str, haystack: &str) -> bool {
+            let mut it = haystack.chars();
+            for nc in needle.chars() {
+                let mut found = false;
+                for hc in it.by_ref() {
+                    if nc == hc { found = true; break; }
+                }
+                if !found { return false; }
+            }
+            true
+        }
+
         for record in records {
-            if record.command.starts_with(prefix) {
+            let cmd_lower = record.command.to_lowercase();
+            let substring = cmd_lower.contains(&q_lower);
+            let fuzzy = !substring && is_subsequence(&q_lower, &cmd_lower);
+            if substring || fuzzy {
                 self.clean_record(&record)?;
                 cleaned += 1;
             }

@@ -4,7 +4,6 @@ use anyhow::{Result, Context};
 use crate::storage::{CommandRecord, CommandExecution};
 use chrono::Utc;
 use sha2::{Sha256, Digest};
-use hex;
 
 fn format_command(command: &str) -> String {
     // Remove leading and trailing whitespace
@@ -79,6 +78,7 @@ impl CommandExecutor {
             exit_code: output.status.code().unwrap_or(-1),
             duration_ms: duration.as_millis() as u64,
             record_id,
+            short_code: None,
         };
 
         let execution = CommandExecution {
