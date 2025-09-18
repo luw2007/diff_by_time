@@ -38,6 +38,7 @@
 - Keep `anyhow::Result` for fallible functions; avoid `unwrap()` in non‑test code.
 - Names: modules/files `snake_case`, types `PascalCase`, functions/vars `snake_case`. CLI flags use kebab‑case (e.g., `--no-merge`).
 - Localization: update both EN and ZH keys in `src/i18n.rs` together.
+- Comments: English only for all source code comments (project override).
 
 ## Testing Guidelines
 - Prefer unit tests co‑located under `#[cfg(test)]` (see `src/fuzzy_matcher.rs`). Use `test_*` naming.

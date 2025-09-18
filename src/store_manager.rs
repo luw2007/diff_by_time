@@ -192,6 +192,8 @@ impl StoreManager {
             record,
             stdout,
             stderr,
+            stdout_path: Some(stdout_path),
+            stderr_path: Some(stderr_path),
         })
     }
 

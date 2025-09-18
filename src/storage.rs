@@ -17,7 +17,9 @@ pub struct CommandRecord {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CommandExecution {
-    pub record: CommandRecord, // Command record
-    pub stdout: String,        // Standard output
-    pub stderr: String,        // Standard error output
+    pub record: CommandRecord,        // Command record
+    pub stdout: String,               // Standard output
+    pub stderr: String,               // Standard error output
+    pub stdout_path: Option<PathBuf>, // Stored stdout file path
+    pub stderr_path: Option<PathBuf>, // Stored stderr file path
 }

@@ -85,3 +85,6 @@ rustfmt-skip.toml
 *.tmp
 *.temp
 *.orig
+
+.serena/*
+evidence/

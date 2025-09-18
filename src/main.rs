@@ -1,6 +1,7 @@
 mod config;
 mod differ;
 mod executor;
+mod bash_parser;
 mod fuzzy_matcher;
 mod i18n;
 mod storage;
@@ -10,7 +11,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::*;
 use sha2::{Digest, Sha256};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use config::Config;
@@ -18,6 +19,7 @@ use differ::Differ;
 use executor::CommandExecutor;
 use i18n::I18n;
 use store_manager::StoreManager;
+use std::fs;
 
 #[derive(Parser)]
 #[command(name = "dt")]
@@ -58,6 +60,15 @@ enum Commands {
         /// Optional query to filter (substring or subsequence)
         query: Option<String>,
         /// Output JSON instead of text
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Parse a Bash snippet/file to AST (tree-sitter-bash)
+    Parse {
+        /// File path to parse; omit to read from STDIN
+        #[arg()] 
+        file: Option<PathBuf>,
+        /// Output JSON instead of outline
         #[arg(long = "json")]
         json: bool,
     },
@@ -238,6 +249,27 @@ fn main() -> Result<()> {
         }
         Commands::Ls { query, json } => {
             list_records_query(&store, &query.unwrap_or_default(), &i18n, json)?;
+        }
+        Commands::Parse { file, json } => {
+            use bash_parser::{ast_outline, BashParser};
+            let input = if let Some(p) = file {
+                fs::read_to_string(&p).map_err(|e| anyhow::anyhow!("读取文件失败: {}", e))?
+            } else {
+                let mut buf = String::new();
+                io::stdin()
+                    .read_to_string(&mut buf)
+                    .map_err(|e| anyhow::anyhow!("读取 STDIN 失败: {}", e))?;
+                buf
+            };
+            let mut parser = BashParser::new()?;
+            let ast = parser.parse_to_ast(&input)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&ast)?);
+            } else {
+                let mut outline = String::new();
+                ast_outline(&ast, 0, &mut outline);
+                print!("{}", outline);
+            }
         }
         Commands::Clean { mode } => {
             // Global flag for this invocation: if user typed ALL once, skip further confirms
@@ -645,6 +677,7 @@ fn print_help(i18n: &I18n) {
         println!("  {}   {}", "diff".green(), i18n.t("help_diff"));
         println!("  {}     {}", "ls".green(), i18n.t("help_ls"));
         println!("  {}  {}", "clean".green(), i18n.t("help_clean"));
+        println!("  {}   {}", "parse".green(), i18n.t("help_parse"));
         println!(
             "  {}   Print this message or the help of the given subcommand(s)",
             "help".green()
@@ -778,6 +811,7 @@ fn print_help(i18n: &I18n) {
                 println!("  {}    {}", "run".green(), i18n.t("help_run"));
                 println!("  {}   {}", "diff".green(), i18n.t("help_diff"));
                 println!("  {}  {}", "clean".green(), i18n.t("help_clean"));
+                println!("  {}   {}", "parse".green(), i18n.t("help_parse"));
                 println!(
                     "  {}   Print this message or the help of the given subcommand(s)",
                     "help".green()

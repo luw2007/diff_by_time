@@ -9,7 +9,7 @@ impl I18n {
     pub fn new(lang: &str) -> Self {
         let mut translations = HashMap::new();
 
-        // 英文
+        // English translations
         let mut en = HashMap::new();
         // Help texts
         en.insert(
@@ -71,6 +71,7 @@ impl I18n {
         );
         // removed: help_clean_mode (not used)
         en.insert("short_code_label".to_string(), "code".to_string());
+        en.insert("time_label".to_string(), "time".to_string());
         en.insert(
             "help_clean_search".to_string(),
             "Clean by command search".to_string(),
@@ -105,6 +106,9 @@ impl I18n {
             "Optional query to filter (substring/subsequence)".to_string(),
         );
         en.insert("help_ls_json".to_string(), "Output JSON".to_string());
+        en.insert("help_parse".to_string(), "Parse a Bash snippet/file to AST (tree-sitter-bash)".to_string());
+        en.insert("help_parse_file".to_string(), "File path to parse; omit to read from STDIN".to_string());
+        en.insert("help_parse_json".to_string(), "Output JSON instead of outline".to_string());
         // Dangerous command confirmations
         en.insert(
             "confirm_clean_all_title".to_string(),
@@ -195,6 +199,10 @@ impl I18n {
 
         // Interactive selection messages
         en.insert("interactive_filter".to_string(), "Filter (type to fuzzy search, j/k to navigate, Enter to select, Delete to clear, Esc to quit)".to_string());
+        en.insert("status_select_first".to_string(), "Select first".to_string());
+        en.insert("status_select_second".to_string(), "Select second".to_string());
+        en.insert("status_filter".to_string(), "Filter".to_string());
+        en.insert("status_nav_compact".to_string(), "j/k ↑/↓ Enter Del Esc".to_string());
         en.insert(
             "first_selection".to_string(),
             "Select first record (press Enter to confirm):".to_string(),
@@ -208,7 +216,7 @@ impl I18n {
             "Selection complete, comparing records...".to_string(),
         );
         en.insert("no_matches".to_string(), "No matches found".to_string());
-        en.insert("navigate_hint".to_string(), "Navigation: j/k ↑/↓=move, Tab/Space=toggle, Shift+Space=toggle+next, Enter=select, Delete=clear, Esc=quit".to_string());
+        en.insert("navigate_hint".to_string(), "Navigation: j/k ↑/↓=move, Tab/Space=toggle, o/←/→=toggle output, Enter=select, Delete=clear, Esc=quit".to_string());
         en.insert(
             "select_clean_command".to_string(),
             "Select a command to clean:".to_string(),
@@ -252,6 +260,36 @@ impl I18n {
             "execution time: {0}ms -> {1}ms".to_string(),
         );
         en.insert("stdout_diff".to_string(), "stdout diff:".to_string());
+        en.insert(
+            "preview_stdout_header".to_string(),
+            "Preview: stdout".to_string(),
+        );
+        en.insert(
+            "preview_stderr_header".to_string(),
+            "Preview: stderr".to_string(),
+        );
+        en.insert(
+            "preview_toggle_hint".to_string(),
+            "Press o or ←/→ to toggle stdout/stderr".to_string(),
+        );
+        en.insert("preview_path_label".to_string(), "Path: {0}".to_string());
+        en.insert(
+            "preview_path_missing".to_string(),
+            "Path: unavailable".to_string(),
+        );
+        en.insert("preview_empty".to_string(), "Output is empty".to_string());
+        en.insert(
+            "preview_truncated_hint".to_string(),
+            "… truncated".to_string(),
+        );
+        en.insert(
+            "preview_no_selection".to_string(),
+            "Select a record to preview output".to_string(),
+        );
+        en.insert(
+            "preview_single_column_notice".to_string(),
+            "Terminal too narrow, using single-column view".to_string(),
+        );
         en.insert("stderr_diff".to_string(), "stderr diff:".to_string());
         en.insert(
             "output_identical".to_string(),
@@ -349,7 +387,7 @@ impl I18n {
         en.insert("help_label_options".to_string(), "Options:".to_string());
         en.insert("help_label_arguments".to_string(), "Arguments:".to_string());
 
-        // 中文
+        // Chinese translations
         let mut zh = HashMap::new();
         // Help texts (zh)
         zh.insert(
@@ -375,7 +413,7 @@ impl I18n {
             "命令包含管道、重定向或逻辑运算符时，必须用引号包裹整条命令，例如：dt run 'ls -l | wc'。"
                 .to_string(),
         );
-        // 提示
+        // Tips (zh)
         zh.insert(
             "help_tip_run_diff_code".to_string(),
             "提示：dt run 支持 -d, --diff-code <CODE> — {0}".to_string(),
@@ -405,6 +443,7 @@ impl I18n {
         );
         // removed: help_clean_mode (not used)
         zh.insert("short_code_label".to_string(), "短码".to_string());
+        zh.insert("time_label".to_string(), "时间".to_string());
         zh.insert(
             "help_clean_search".to_string(),
             "按命令搜索清理".to_string(),
@@ -433,7 +472,7 @@ impl I18n {
             "可选的查询（子串/子序列）".to_string(),
         );
         zh.insert("help_ls_json".to_string(), "输出 JSON".to_string());
-        // 危险命令确认
+        // Dangerous command confirmations (zh)
         zh.insert(
             "confirm_clean_all_title".to_string(),
             "危险操作：将删除所有历史记录".to_string(),
@@ -450,7 +489,7 @@ impl I18n {
             "confirm_clean_all_aborted".to_string(),
             "已取消，未删除任何记录".to_string(),
         );
-        // 通用删除确认
+        // Generic deletion confirmations (zh)
         zh.insert(
             "confirm_delete_prompt".to_string(),
             "请输入 YES 确认（或输入 ALL 表示本次会话内不再提示）：".to_string(),
@@ -475,7 +514,7 @@ impl I18n {
             "backup_completed".to_string(),
             "已备份记录到 index_{1}.json（当前总数：{0}）".to_string(),
         );
-        // 帮助区段标题
+        // Help section labels (zh)
         zh.insert("help_label_usage".to_string(), "用法:".to_string());
         zh.insert("help_label_commands".to_string(), "命令:".to_string());
         zh.insert("help_label_options".to_string(), "选项:".to_string());
@@ -528,6 +567,10 @@ impl I18n {
             "interactive_filter".to_string(),
             "过滤器 (输入模糊搜索，j/k 导航，Enter 选择，Delete 清空，Esc 退出)".to_string(),
         );
+        zh.insert("status_select_first".to_string(), "选择首条".to_string());
+        zh.insert("status_select_second".to_string(), "选择次条".to_string());
+        zh.insert("status_filter".to_string(), "筛选".to_string());
+        zh.insert("status_nav_compact".to_string(), "j/k ↑/↓ Enter Del Esc".to_string());
         zh.insert(
             "first_selection".to_string(),
             "选择第一条记录 (按Enter确认):".to_string(),
@@ -541,7 +584,7 @@ impl I18n {
             "选择完成，正在比较记录...".to_string(),
         );
         zh.insert("no_matches".to_string(), "没有找到匹配的记录".to_string());
-        zh.insert("navigate_hint".to_string(), "导航: j/k ↑/↓=移动, Tab/Space=切换选中, Shift+Space=切换并下移, Enter=确认, Delete=清空, Esc=退出".to_string());
+        zh.insert("navigate_hint".to_string(), "导航: j/k ↑/↓=移动, Tab/Space=切换选中, o/←/→=切换输出, Enter=确认, Delete=清空, Esc=退出".to_string());
         zh.insert(
             "select_clean_command".to_string(),
             "选择要清理的命令:".to_string(),
@@ -585,6 +628,36 @@ impl I18n {
             "执行时间: {0}ms -> {1}ms".to_string(),
         );
         zh.insert("stdout_diff".to_string(), "标准输出差异:".to_string());
+        zh.insert(
+            "preview_stdout_header".to_string(),
+            "输出预览（stdout）".to_string(),
+        );
+        zh.insert(
+            "preview_stderr_header".to_string(),
+            "输出预览（stderr）".to_string(),
+        );
+        zh.insert(
+            "preview_toggle_hint".to_string(),
+            "按 o 或 ←/→ 切换 stdout/stderr".to_string(),
+        );
+        zh.insert("preview_path_label".to_string(), "路径: {0}".to_string());
+        zh.insert(
+            "preview_path_missing".to_string(),
+            "路径: 暂不可用".to_string(),
+        );
+        zh.insert("preview_empty".to_string(), "输出为空".to_string());
+        zh.insert(
+            "preview_truncated_hint".to_string(),
+            "… 内容较长，已截断".to_string(),
+        );
+        zh.insert(
+            "preview_no_selection".to_string(),
+            "请选择记录以查看输出预览".to_string(),
+        );
+        zh.insert(
+            "preview_single_column_notice".to_string(),
+            "终端宽度不足，使用单列视图".to_string(),
+        );
         zh.insert("stderr_diff".to_string(), "错误输出差异:".to_string());
         zh.insert("output_identical".to_string(), "输出完全一致".to_string());
         zh.insert(
@@ -599,6 +672,10 @@ impl I18n {
             "using_filtered_records".to_string(),
             "使用过滤后的两个记录进行比较:".to_string(),
         );
+        // Parse help (新增)
+        zh.insert("help_parse".to_string(), "解析 Bash 片段/文件为 AST（基于 tree-sitter-bash）".to_string());
+        zh.insert("help_parse_file".to_string(), "解析的文件路径；缺省则从 STDIN 读取".to_string());
+        zh.insert("help_parse_json".to_string(), "以 JSON 输出（默认为概要树）".to_string());
 
         // Error messages
         zh.insert(

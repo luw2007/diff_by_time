@@ -80,6 +80,12 @@ alt_screen = false        # Use alternate screen in interactive mode
 
 ## Interactive UX
 
+- Left panel shows compact items: `code:<a..z> time:<YYYY-MM-DD HH:MM:SS>`
+- Right panel preview:
+  - Row 1 = `Path: …` (truncated to width)
+  - Row 2 = `Preview: stdout|stderr`
+  - File content follows; press `o` or `←/→` to toggle stdout/stderr
+- Bottom status bar shows concise help: selection step, `Filter: <input>`, and `j/k ↑/↓ Enter Del Esc`
 - Fuzzy filter: type to filter; uses substring/prefix/number priority plus skim fuzzy fallback
 - Navigation: `j/k` or arrow keys; `PgUp/PgDn`; `Ctrl-a/e` (home/end)
 - Selection: `Enter`

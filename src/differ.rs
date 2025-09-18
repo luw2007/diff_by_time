@@ -6,12 +6,16 @@ use anyhow::Result;
 use chrono::{DateTime, Datelike};
 use colored::*;
 use crossterm::{
+    cursor::MoveTo,
     event::{self, Event, KeyCode, KeyModifiers},
-    terminal,
+    style::Print,
+    terminal::{self},
+    QueueableCommand,
 };
 use similar::{ChangeTag, TextDiff};
 use std::io::{self, Write};
 use std::sync::Once;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub struct Differ;
 
@@ -20,6 +24,43 @@ struct CommandGroup {
     command: String,
     count: usize,
     latest: chrono::DateTime<chrono::Utc>,
+}
+
+const PREVIEW_MIN_WIDTH: usize = 80;
+const PREVIEW_LEFT_MIN_WIDTH: usize = 24;
+const PREVIEW_RIGHT_MIN_WIDTH: usize = 30;
+
+#[derive(Clone, Copy)]
+enum PreviewTarget {
+    Stdout,
+    Stderr,
+}
+
+struct PreviewLayout {
+    left_width: usize,
+    preview_width: usize,
+    start_col: u16,
+    total_rows: u16,
+}
+
+impl PreviewTarget {
+    fn toggle(self) -> Self {
+        match self {
+            PreviewTarget::Stdout => PreviewTarget::Stderr,
+            PreviewTarget::Stderr => PreviewTarget::Stdout,
+        }
+    }
+
+    fn label_key(self) -> &'static str {
+        match self {
+            PreviewTarget::Stdout => "preview_stdout_header",
+            PreviewTarget::Stderr => "preview_stderr_header",
+        }
+    }
+
+    fn is_stdout(self) -> bool {
+        matches!(self, PreviewTarget::Stdout)
+    }
 }
 
 impl Differ {
@@ -101,7 +142,10 @@ impl Differ {
         loop {
             print!("\x1b[2J\x1b[H");
             print!("{}\r\n", i18n.t("select_clean_command"));
-            print!("{}: ", i18n.t("interactive_filter"));
+            // Terminal width for prompt truncation
+            let (cols, _rows) = crossterm::terminal::size().unwrap_or((80, 24));
+            let prompt = Self::truncate_for_column(&i18n.t("interactive_filter"), cols as usize - 2);
+            print!("{}: ", prompt);
             print!("{}\r\n\r\n", filter_input);
 
             let items: Vec<(usize, String)> = groups
@@ -178,7 +222,8 @@ impl Differ {
             }
 
             print!("\r\n");
-            print!("\x1b[90m{}\x1b[0m\r\n", i18n.t("navigate_hint"));
+            let hint = Self::truncate_for_column(&i18n.t("navigate_hint"), cols as usize);
+            print!("\x1b[90m{}\x1b[0m\r\n", hint);
             stdout.flush().ok();
 
             if let Ok(Event::Key(key)) = event::read() {
@@ -426,7 +471,9 @@ impl Differ {
             }
 
             print!("\r\n");
-            print!("\x1b[90m{}\x1b[0m\r\n", i18n.t("navigate_hint"));
+            let (cols, _rows) = crossterm::terminal::size().unwrap_or((80, 24));
+            let hint = Self::truncate_for_column(&i18n.t("navigate_hint"), cols as usize);
+            print!("\x1b[90m{}\x1b[0m\r\n", hint);
             stdout.flush().ok();
 
             if let Ok(Event::Key(key)) = event::read() {
@@ -910,6 +957,279 @@ impl Differ {
         Some(output)
     }
 
+    fn compute_preview_layout(total_cols: usize, total_rows: u16) -> Option<PreviewLayout> {
+        if total_cols < PREVIEW_MIN_WIDTH {
+            return None;
+        }
+        // Prefer a ~1/3 split, then clamp by min widths
+        let mut left_width = (total_cols) / 3;
+        if left_width < PREVIEW_LEFT_MIN_WIDTH {
+            left_width = PREVIEW_LEFT_MIN_WIDTH;
+        }
+        if left_width > total_cols.saturating_sub(PREVIEW_RIGHT_MIN_WIDTH) {
+            left_width = total_cols.saturating_sub(PREVIEW_RIGHT_MIN_WIDTH);
+        }
+        let preview_width = total_cols.saturating_sub(left_width + 2);
+        if preview_width < PREVIEW_RIGHT_MIN_WIDTH {
+            return None;
+        }
+        Some(PreviewLayout {
+            left_width,
+            preview_width,
+            start_col: (left_width + 2).min(u16::MAX as usize) as u16,
+            total_rows,
+        })
+    }
+
+    fn char_display_width(ch: char) -> usize {
+        UnicodeWidthChar::width(ch).unwrap_or(1).max(1)
+    }
+
+    fn wrap_line_to_width(line: &str, width: usize) -> Vec<String> {
+        if width == 0 {
+            return vec![String::new()];
+        }
+        let mut result = Vec::new();
+        let mut current = String::new();
+        let mut current_width = 0usize;
+
+        for ch in line.chars() {
+            let ch_width = Self::char_display_width(ch);
+            if current_width + ch_width > width && !current.is_empty() {
+                result.push(current.clone());
+                current.clear();
+                current_width = 0;
+            }
+            if ch_width > width {
+                // Character alone exceeds width; truncate and mark overflow
+                if current.is_empty() {
+                    current.push(ch);
+                    result.push(current.clone());
+                    current.clear();
+                    current_width = 0;
+                } else {
+                    result.push(current.clone());
+                    current.clear();
+                    current.push(ch);
+                    result.push(current.clone());
+                    current.clear();
+                    current_width = 0;
+                }
+                continue;
+            }
+            current.push(ch);
+            current_width += ch_width;
+            if current_width == width {
+                result.push(current.clone());
+                current.clear();
+                current_width = 0;
+            }
+        }
+
+        if !current.is_empty() {
+            result.push(current);
+        }
+
+        if result.is_empty() {
+            result.push(String::new());
+        }
+
+        result
+    }
+
+    fn truncate_for_column(text: &str, width: usize) -> String {
+        if width == 0 {
+            return String::new();
+        }
+        if UnicodeWidthStr::width(text) <= width {
+            return text.to_string();
+        }
+        let ellipsis = "…";
+        let ellipsis_width = UnicodeWidthStr::width(ellipsis);
+        let mut result = String::new();
+        let mut used = 0usize;
+        for ch in text.chars() {
+            let ch_width = Self::char_display_width(ch);
+            if used + ch_width + ellipsis_width > width {
+                break;
+            }
+            result.push(ch);
+            used += ch_width;
+        }
+        if result.is_empty() {
+            return ellipsis.to_string();
+        }
+        result.push('…');
+        result
+    }
+
+    // Note: previous tail-focused truncation helper was removed as unused.
+
+    fn wrap_preview_content(content: &str, width: usize, max_lines: usize) -> (Vec<String>, bool) {
+        if width == 0 || max_lines == 0 {
+            return (Vec::new(), !content.is_empty());
+        }
+        let mut lines: Vec<String> = Vec::new();
+        let mut truncated = false;
+
+        for raw_line in content.split('\n') {
+            if lines.len() >= max_lines {
+                truncated = true;
+                break;
+            }
+
+            if raw_line.is_empty() {
+                lines.push(String::new());
+                continue;
+            }
+
+            for segment in Self::wrap_line_to_width(raw_line, width) {
+                if lines.len() >= max_lines {
+                    truncated = true;
+                    break;
+                }
+                lines.push(segment);
+            }
+
+            if truncated {
+                break;
+            }
+
+            // If there are more raw lines remaining and we already used all slots
+            if lines.len() >= max_lines {
+                truncated = true;
+                break;
+            }
+        }
+
+        if truncated && !lines.is_empty() {
+            let last_index = lines.len() - 1;
+            lines[last_index] = Self::truncate_for_column(&lines[last_index], width);
+            if !lines[last_index].ends_with('…') {
+                lines[last_index].push('…');
+            }
+        }
+
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+
+        (lines, truncated)
+    }
+    fn draw_preview_panel(
+        stdout: &mut io::Stdout,
+        layout: &PreviewLayout,
+        i18n: &I18n,
+        preview_target: PreviewTarget,
+        exec: Option<&CommandExecution>,
+    ) -> io::Result<()> {
+        let max_rows = layout.total_rows.saturating_sub(1);
+        if max_rows == 0 {
+            return Ok(());
+        }
+        let header_text = i18n.t(preview_target.label_key());
+        let reserved_header_rows = 2usize;
+
+        let (_path_line, body_lines) = match exec {
+            Some(execution) => {
+                let raw_path = if preview_target.is_stdout() {
+                    execution.stdout_path.as_ref()
+                } else {
+                    execution.stderr_path.as_ref()
+                };
+                let path_text = raw_path
+                    .map(|p| i18n.t_format("preview_path_label", &[&p.display().to_string()]))
+                    .unwrap_or_else(|| i18n.t("preview_path_missing"));
+                let path_line = None; // Path is rendered in the preview header area; avoid double rendering
+
+                // Reserve body lines according to wrapped path rows; always keep at least 1 body line
+                let path_rows = Self::wrap_line_to_width(&path_text, layout.preview_width).len();
+                let available_body_lines = max_rows
+                    .saturating_sub((reserved_header_rows + path_rows) as u16)
+                    .max(1) as usize;
+
+                let content = if preview_target.is_stdout() {
+                    execution.stdout.as_str()
+                } else {
+                    execution.stderr.as_str()
+                };
+                let lines = if content.is_empty() {
+                    vec![i18n.t("preview_empty")]
+                } else {
+                    let (wrapped_body, was_truncated) = Self::wrap_preview_content(
+                        content,
+                        layout.preview_width,
+                        available_body_lines,
+                    );
+                    let mut collected = if wrapped_body.is_empty() {
+                        vec![i18n.t("preview_empty")]
+                    } else {
+                        wrapped_body
+                    };
+                    if was_truncated {
+                        collected.push(i18n.t("preview_truncated_hint"));
+                    }
+                    collected
+                };
+
+                (path_line, lines)
+            }
+            None => (
+                Some(Self::truncate_for_column(
+                    &i18n.t("preview_path_missing"),
+                    layout.preview_width,
+                )),
+                vec![i18n.t("preview_no_selection")],
+            ),
+        };
+
+        // Place preview at the very top row of the preview column
+        // (we moved prompts to the bottom status bar)
+        let mut row = 0u16;
+        // Draw vertical separator between panels
+        let sep_col = layout.start_col.saturating_sub(1);
+        for r in 0..max_rows { stdout.queue(MoveTo(sep_col, r))?; stdout.queue(Print("│".to_string()))?; }
+
+        // Header area: row 0 shows (truncated) Path; row 1 shows preview header
+        let path_wrapped: Vec<String> = match exec {
+            Some(execution) => {
+                let raw_path = if preview_target.is_stdout() { execution.stdout_path.as_ref() } else { execution.stderr_path.as_ref() };
+                let label = raw_path
+                    .map(|p| i18n.t_format("preview_path_label", &[&p.display().to_string()]))
+                    .unwrap_or_else(|| i18n.t("preview_path_missing"));
+                Self::wrap_line_to_width(&label, layout.preview_width)
+            }
+            None => { let label = i18n.t("preview_path_missing"); Self::wrap_line_to_width(&label, layout.preview_width) }
+        };
+        // Line 1: Path (single line, truncated)
+        let first_path = path_wrapped.first().cloned().unwrap_or_default();
+        let path_display = Self::truncate_for_column(&first_path, layout.preview_width);
+        stdout.queue(MoveTo(layout.start_col, row))?; stdout.queue(Print(path_display))?; row = row.saturating_add(1);
+        // Line 2: Preview header (no toggle hint to keep concise)
+        let header_display = Self::truncate_for_column(&header_text, layout.preview_width);
+        stdout.queue(MoveTo(layout.start_col, row))?; stdout.queue(Print(header_display))?; row = row.saturating_add(1);
+
+        
+
+        for line in body_lines {
+            if row >= max_rows {
+                break;
+            }
+            let display_line = Self::truncate_for_column(&line, layout.preview_width);
+            stdout.queue(MoveTo(layout.start_col, row))?;
+            stdout.queue(Print(format!("{}[K", display_line)))?;
+            row = row.saturating_add(1);
+        }
+
+        while row < max_rows {
+            stdout.queue(MoveTo(layout.start_col, row))?;
+            stdout.queue(Print("[K".to_string()))?;
+            row = row.saturating_add(1);
+        }
+
+        Ok(())
+    }
+
     fn diff_text(old: &str, new: &str) -> String {
         let diff = TextDiff::from_lines(old, new);
 
@@ -946,27 +1266,25 @@ impl Differ {
             i18n.t_format("select_executions", &[&executions.len().to_string()])
         );
 
-        // Display all execution records
+        // Render records (compact: short code and time only)
         for (i, exec) in executions.iter().enumerate() {
             let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
             let date_str = local_time.format("%Y-%m-%d %H:%M:%S");
             if let Some(code) = &exec.record.short_code {
                 println!(
-                    "{}: {} (exit code: {}, time: {}) [{}: {}]",
+                    "{}: {}:{} {}: {}",
                     i + 1,
-                    exec.record.command,
-                    exec.record.exit_code,
-                    date_str,
                     i18n.t("short_code_label"),
-                    code
+                    code,
+                    i18n.t("time_label"),
+                    date_str,
                 );
             } else {
                 println!(
-                    "{}: {} (exit code: {}, time: {})",
+                    "{}: {}: {}",
                     i + 1,
-                    exec.record.command,
-                    exec.record.exit_code,
-                    date_str
+                    i18n.t("time_label"),
+                    date_str,
                 );
             }
         }
@@ -1100,6 +1418,7 @@ impl Differ {
         let mut filter_input = String::new();
         let mut current_selection = 0;
         let mut scroll_offset: usize = 0;
+        let mut preview_target = PreviewTarget::Stdout;
 
         // Dataset (may reload on input)
         let mut current_execs: Vec<CommandExecution> = executions.to_vec();
@@ -1110,17 +1429,13 @@ impl Differ {
             print!("\x1b[2J\x1b[H");
             stdout.flush().unwrap();
 
-            // Display title and input prompt
-            if selected_ids.is_empty() {
-                print!("{}\r\n", i18n.t("first_selection"));
-            } else if selected_ids.len() == 1 {
-                print!("{}\r\n", i18n.t("second_selection"));
-            }
+        // Top prompts are removed; a compact bottom status bar shows select and filter hints
 
-            // Display filter input line
-            print!("{}: ", i18n.t("interactive_filter"));
-            print!("{}\r\n", filter_input);
-            print!("\r\n");
+            let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+            let mut layout = Self::compute_preview_layout(cols as usize, rows);
+            if layout.is_none() {
+                print!("{}\r\n", i18n.t("preview_single_column_notice"));
+            }
 
             // Use skim-style fuzzy matching to filter records
             let fuzzy_matcher = SkimMatcher::new();
@@ -1154,8 +1469,65 @@ impl Differ {
                 matched_items.into_iter().map(|(i, _, _)| i).collect()
             };
 
-            // Display filtered records
-            if filtered_indices.is_empty() {
+                // After we have filtered items, adapt the left panel width
+                if let Some(ref mut lay) = layout {
+                    // Measure max display width of visible lines (without truncation)
+                    use unicode_width::UnicodeWidthStr;
+                    let mut max_w = 0usize;
+                    let prefix_width = 2; // space for current selected mark "✓ " or two spaces
+                    let end_pos_probe = (
+                        scroll_offset
+                            + if let Some(mv) = max_viewport { mv.max(3) } else { rows as usize }
+                    )
+                    .min(filtered_indices.len());
+                    for original_i in filtered_indices
+                        .iter()
+                        .cloned()
+                        .skip(scroll_offset)
+                        .take(end_pos_probe.saturating_sub(scroll_offset))
+                    {
+                        let exec = &display_executions[original_i];
+                        let actual_index = original_i + 1;
+                        let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
+                        let date_str = local_time.format("%Y-%m-%d %H:%M:%S").to_string();
+                        let code = exec.record.short_code.as_deref();
+                        let raw_line = if let Some(code) = code {
+                            format!(
+                                "{}: {}:{} {}: {}",
+                                actual_index,
+                                i18n.t("short_code_label"),
+                                code,
+                                i18n.t("time_label"),
+                                date_str,
+                            )
+                        } else {
+                            format!(
+                                "{}: {}: {}",
+                                actual_index,
+                                i18n.t("time_label"),
+                                date_str,
+                            )
+                        };
+                        let w = prefix_width + UnicodeWidthStr::width(raw_line.as_str());
+                        if w > max_w {
+                            max_w = w;
+                        }
+                    }
+                    // Clamp left width between 20 and 45% of total columns, plus small padding
+                    let total_cols = cols as usize;
+                    let pad = 2usize;
+                    let min_left = PREVIEW_LEFT_MIN_WIDTH.max(20);
+                    let max_left = (total_cols as f32 * 0.45) as usize;
+                    let desired = (max_w + pad).max(min_left).min(max_left);
+                    // Ensure right side keeps its minimum width
+                    let allowed_left = desired.min(total_cols.saturating_sub(PREVIEW_RIGHT_MIN_WIDTH));
+                    lay.left_width = allowed_left;
+                    lay.start_col = (lay.left_width + 2).min(u16::MAX as usize) as u16;
+                    lay.preview_width = total_cols.saturating_sub(lay.left_width + 2);
+                }
+
+                // Display filtered records
+                if filtered_indices.is_empty() {
                 // Red text when nothing matches
                 print!("\x1b[31m{}\x1b[0m\r\n", i18n.t("no_matches"));
             } else {
@@ -1172,8 +1544,7 @@ impl Differ {
                     }
                     v
                 } else {
-                    let (_cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-                    let reserved_lines = 6usize; // title + filter + blank + hint + margins
+                    let reserved_lines = 3usize; // bottom status bar + preview padding
                     let mut viewport = rows as usize;
                     viewport = viewport.saturating_sub(reserved_lines);
                     if viewport < 5 {
@@ -1206,26 +1577,29 @@ impl Differ {
                     let is_selected = selected_ids.iter().any(|id| id == &exec.record.record_id);
                     let prefix = if is_selected { "✓ " } else { "  " };
                     let code = exec.record.short_code.as_deref();
-                    let line = if let Some(code) = code {
+                    let raw_line = if let Some(code) = code {
                         format!(
-                            "{}{}: {} (exit code: {}, time: {}) [{}: {}]",
+                            "{}{}: {}:{} {}: {}",
                             prefix,
                             actual_index,
-                            exec.record.command,
-                            exec.record.exit_code,
-                            date_str,
                             i18n.t("short_code_label"),
-                            code
+                            code,
+                            i18n.t("time_label"),
+                            date_str,
                         )
                     } else {
                         format!(
-                            "{}{}: {} (exit code: {}, time: {})",
+                            "{}{}: {}: {}",
                             prefix,
                             actual_index,
-                            exec.record.command,
-                            exec.record.exit_code,
-                            date_str
+                            i18n.t("time_label"),
+                            date_str,
                         )
+                    };
+                    let line = if let Some(ref layout) = layout {
+                        Self::truncate_for_column(&raw_line, layout.left_width.saturating_sub(1))
+                    } else {
+                        raw_line.clone()
                     };
 
                     // Current highlight line: put reset code in same line to avoid polluting next line
@@ -1237,10 +1611,37 @@ impl Differ {
                 }
             }
 
-            // Display navigation hints
-            print!("\r\n");
-            // Dim hint line
-            print!("\x1b[90m{}\x1b[0m\r\n", i18n.t("navigate_hint"));
+            // Bottom status bar: compact messages to avoid overflow
+            let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+            let select_msg = if selected_ids.is_empty() {
+                i18n.t("status_select_first")
+            } else if selected_ids.len() == 1 {
+                i18n.t("status_select_second")
+            } else {
+                i18n.t("selection_complete")
+            };
+            let status = format!(
+                "{} | {}: {} | {}",
+                Self::truncate_for_column(&select_msg, (cols as usize) / 5),
+                i18n.t("status_filter"),
+                Self::truncate_for_column(&filter_input, (cols as usize) / 2),
+                i18n.t("status_nav_compact"),
+            );
+            // Move cursor to last line, clear to end, then draw the status bar
+            print!("\x1b[{};1H\x1b[90m{}\x1b[0m\x1b[K", rows, Self::truncate_for_column(&status, cols as usize));
+
+            if let Some(ref layout) = layout {
+                let preview_exec = filtered_indices
+                    .get(current_selection)
+                    .map(|&idx| display_executions[idx]);
+                let _ = Self::draw_preview_panel(
+                    &mut stdout,
+                    layout,
+                    i18n,
+                    preview_target,
+                    preview_exec,
+                );
+            }
 
             // Refresh output
             stdout.flush().unwrap();
@@ -1411,8 +1812,7 @@ impl Differ {
                         toggle_selection(step_down);
                     }
                     KeyCode::Char(' ') => {
-                        let step_down = key_event.modifiers.contains(KeyModifiers::SHIFT);
-                        toggle_selection(step_down);
+                        toggle_selection(false);
                     }
                     KeyCode::Esc => {
                         // Exit and return default selection
@@ -1472,6 +1872,9 @@ impl Differ {
                         current_execs = loader();
                         display_executions = current_execs.iter().collect();
                     }
+                    KeyCode::Left | KeyCode::Right | KeyCode::Char('o') | KeyCode::Char('O') => {
+                        preview_target = preview_target.toggle();
+                    }
                     // Character input
                     KeyCode::Char(c) => {
                         // Add character to filter input and reset view
@@ -1501,27 +1904,25 @@ impl Differ {
             i18n.t_format("select_executions", &[&executions.len().to_string()])
         );
 
-        // Display all execution records (with short code)
+        // Render records (compact: short code and time only)
         for (i, exec) in executions.iter().enumerate() {
             let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
             let date_str = local_time.format("%Y-%m-%d %H:%M:%S");
             if let Some(code) = &exec.record.short_code {
                 println!(
-                    "{}: {} (exit code: {}, time: {}) [{}: {}]",
+                    "{}: {}:{} {}: {}",
                     i + 1,
-                    exec.record.command,
-                    exec.record.exit_code,
-                    date_str,
                     i18n.t("short_code_label"),
-                    code
+                    code,
+                    i18n.t("time_label"),
+                    date_str,
                 );
             } else {
                 println!(
-                    "{}: {} (exit code: {}, time: {})",
+                    "{}: {}: {}",
                     i + 1,
-                    exec.record.command,
-                    exec.record.exit_code,
-                    date_str
+                    i18n.t("time_label"),
+                    date_str,
                 );
             }
         }
