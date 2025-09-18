@@ -14,3 +14,5 @@
 - Keep keyboard navigation only; clarify preview toggle hint
 - Minor cleanups (comments, layout reserve lines)
 
+## 0.1.3 — 2025-09-18
+- Remove leftover i18n key for auto-click label (no longer used)

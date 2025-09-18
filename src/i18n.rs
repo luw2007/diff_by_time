@@ -203,7 +203,6 @@ impl I18n {
         en.insert("status_select_second".to_string(), "Select second".to_string());
         en.insert("status_filter".to_string(), "Filter".to_string());
         en.insert("status_nav_compact".to_string(), "j/k ↑/↓ Enter Del Esc".to_string());
-        en.insert("auto_click_config_label".to_string(), "Auto-click config:".to_string());
         en.insert(
             "first_selection".to_string(),
             "Select first record (press Enter to confirm):".to_string(),
@@ -580,7 +579,6 @@ impl I18n {
         zh.insert("status_select_second".to_string(), "选择次条".to_string());
         zh.insert("status_filter".to_string(), "筛选".to_string());
         zh.insert("status_nav_compact".to_string(), "j/k ↑/↓ Enter Del Esc".to_string());
-        zh.insert("auto_click_config_label".to_string(), "点击配置：".to_string());
         zh.insert(
             "first_selection".to_string(),
             "选择第一条记录 (按Enter确认):".to_string(),
