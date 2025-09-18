@@ -11,6 +11,24 @@ dt lets you run shell commands, record their outputs over time, and compare resu
   - `cargo run -- diff "ls | head -5"`
   - `cargo run -- list` (compat alias; opens interactive diff selector)
 
+## Gallery
+
+Generate demo GIFs locally using VHS (not stored in git):
+
+```bash
+brew install vhs            # or follow VHS installation guide
+make gallery               # renders docs/vhs/*.tape to docs/gallery/*.gif
+open docs/gallery          # view generated GIFs locally
+```
+
+Tapes:
+- `docs/vhs/dt-diff.tape` → `docs/gallery/dt-diff.gif`
+- `docs/vhs/dt-run.tape`  → `docs/gallery/dt-run.gif`
+
+Notes:
+- Generated media under `docs/gallery/` is ignored by git (`.gitignore`).
+- Scripts fix terminal size and language for reproducible output.
+
 ## CLI Overview
 
 `dt run <COMMAND>`

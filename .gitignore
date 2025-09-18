@@ -88,3 +88,6 @@ rustfmt-skip.toml
 
 .serena/*
 evidence/
+# Gallery artifacts (generated locally, do not commit)
+docs/gallery/*
+!docs/gallery/.gitkeep
