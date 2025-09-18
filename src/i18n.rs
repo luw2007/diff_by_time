@@ -203,6 +203,7 @@ impl I18n {
         en.insert("status_select_second".to_string(), "Select second".to_string());
         en.insert("status_filter".to_string(), "Filter".to_string());
         en.insert("status_nav_compact".to_string(), "j/k ↑/↓ Enter Del Esc".to_string());
+        en.insert("auto_click_config_label".to_string(), "Auto-click config:".to_string());
         en.insert(
             "first_selection".to_string(),
             "Select first record (press Enter to confirm):".to_string(),
@@ -272,6 +273,10 @@ impl I18n {
             "preview_toggle_hint".to_string(),
             "Press o or ←/→ to toggle stdout/stderr".to_string(),
         );
+        en.insert(
+            "preview_toggle_short".to_string(),
+            "o/←/→ to switch".to_string(),
+        );
         en.insert("preview_path_label".to_string(), "Path: {0}".to_string());
         en.insert(
             "preview_path_missing".to_string(),
@@ -289,6 +294,10 @@ impl I18n {
         en.insert(
             "preview_single_column_notice".to_string(),
             "Terminal too narrow, using single-column view".to_string(),
+        );
+        en.insert(
+            "terminal_too_small".to_string(),
+            "Terminal too small: need at least {0}x{1}, current {2}x{3}".to_string(),
         );
         en.insert("stderr_diff".to_string(), "stderr diff:".to_string());
         en.insert(
@@ -571,6 +580,7 @@ impl I18n {
         zh.insert("status_select_second".to_string(), "选择次条".to_string());
         zh.insert("status_filter".to_string(), "筛选".to_string());
         zh.insert("status_nav_compact".to_string(), "j/k ↑/↓ Enter Del Esc".to_string());
+        zh.insert("auto_click_config_label".to_string(), "点击配置：".to_string());
         zh.insert(
             "first_selection".to_string(),
             "选择第一条记录 (按Enter确认):".to_string(),
@@ -640,6 +650,10 @@ impl I18n {
             "preview_toggle_hint".to_string(),
             "按 o 或 ←/→ 切换 stdout/stderr".to_string(),
         );
+        zh.insert(
+            "preview_toggle_short".to_string(),
+            "o/←/→ 切换".to_string(),
+        );
         zh.insert("preview_path_label".to_string(), "路径: {0}".to_string());
         zh.insert(
             "preview_path_missing".to_string(),
@@ -657,6 +671,10 @@ impl I18n {
         zh.insert(
             "preview_single_column_notice".to_string(),
             "终端宽度不足，使用单列视图".to_string(),
+        );
+        zh.insert(
+            "terminal_too_small".to_string(),
+            "终端尺寸过小：至少需要 {0}x{1}，当前 {2}x{3}".to_string(),
         );
         zh.insert("stderr_diff".to_string(), "错误输出差异:".to_string());
         zh.insert("output_identical".to_string(), "输出完全一致".to_string());

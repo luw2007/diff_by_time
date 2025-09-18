@@ -29,6 +29,8 @@ struct CommandGroup {
 const PREVIEW_MIN_WIDTH: usize = 80;
 const PREVIEW_LEFT_MIN_WIDTH: usize = 24;
 const PREVIEW_RIGHT_MIN_WIDTH: usize = 30;
+const MIN_TERMINAL_COLS: u16 = 80; // minimum terminal width to render two-column UI without deformation
+const MIN_TERMINAL_ROWS: u16 = 20; // minimum terminal height to render headers, list and preview
 
 #[derive(Clone, Copy)]
 enum PreviewTarget {
@@ -141,6 +143,18 @@ impl Differ {
 
         loop {
             print!("\x1b[2J\x1b[H");
+            // Enforce minimum terminal size before rendering UI
+            let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+            if cols < MIN_TERMINAL_COLS || rows < MIN_TERMINAL_ROWS {
+                let warn = i18n.t_format(
+                    "terminal_too_small",
+                    &[&MIN_TERMINAL_COLS.to_string(), &MIN_TERMINAL_ROWS.to_string(), &cols.to_string(), &rows.to_string()]
+                );
+                print!("{}\r\n", warn);
+                stdout.flush().ok();
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                continue;
+            }
             print!("{}\r\n", i18n.t("select_clean_command"));
             // Terminal width for prompt truncation
             let (cols, _rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -1205,8 +1219,9 @@ impl Differ {
         let first_path = path_wrapped.first().cloned().unwrap_or_default();
         let path_display = Self::truncate_for_column(&first_path, layout.preview_width);
         stdout.queue(MoveTo(layout.start_col, row))?; stdout.queue(Print(path_display))?; row = row.saturating_add(1);
-        // Line 2: Preview header (no toggle hint to keep concise)
-        let header_display = Self::truncate_for_column(&header_text, layout.preview_width);
+        // Line 2: Preview header with a concise toggle hint so users discover left/right switch
+        let header_with_hint = format!("{}  ·  {}", header_text, i18n.t("preview_toggle_short"));
+        let header_display = Self::truncate_for_column(&header_with_hint, layout.preview_width);
         stdout.queue(MoveTo(layout.start_col, row))?; stdout.queue(Print(header_display))?; row = row.saturating_add(1);
 
         
@@ -1414,6 +1429,8 @@ impl Differ {
         print!("\x1b[?7l\x1b[?25l");
         stdout.flush().ok();
 
+        // Mouse features are disabled to keep UI simple and robust
+
         let mut selected_ids: Vec<String> = Vec::new();
         let mut filter_input = String::new();
         let mut current_selection = 0;
@@ -1428,8 +1445,20 @@ impl Differ {
             // Use simple ANSI escape to clear screen and move cursor to top
             print!("\x1b[2J\x1b[H");
             stdout.flush().unwrap();
+            // Enforce minimum terminal size to avoid deformed layout on resize
+            let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+            if cols < MIN_TERMINAL_COLS || rows < MIN_TERMINAL_ROWS {
+                let warn = i18n.t_format(
+                    "terminal_too_small",
+                    &[&MIN_TERMINAL_COLS.to_string(), &MIN_TERMINAL_ROWS.to_string(), &cols.to_string(), &rows.to_string()]
+                );
+                print!("{}\r\n", warn);
+                stdout.flush().ok();
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                continue;
+            }
 
-        // Top prompts are removed; a compact bottom status bar shows select and filter hints
+            // Top prompts are removed; a compact bottom status bar shows select and filter hints
 
             let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
             let mut layout = Self::compute_preview_layout(cols as usize, rows);
@@ -1544,7 +1573,7 @@ impl Differ {
                     }
                     v
                 } else {
-                    let reserved_lines = 3usize; // bottom status bar + preview padding
+                    let reserved_lines = 5usize; // filter (row0) + header (row1) + bottom status + preview padding
                     let mut viewport = rows as usize;
                     viewport = viewport.saturating_sub(reserved_lines);
                     if viewport < 5 {
@@ -1552,6 +1581,13 @@ impl Differ {
                     }
                     viewport
                 };
+
+                // Row 0: filter input prompt + current input
+                print!("{}: {}\r\n", i18n.t("status_filter"), filter_input);
+                // Row 1: compact header: show current index / total as "cmd i/total"
+                let total = filtered_indices.len();
+                let current_display = if total == 0 { 0 } else { current_selection + 1 };
+                print!("(cmd {}/{})\r\n", current_display, total);
 
                 // Adjust scroll window to keep current selection visible
                 if current_selection < scroll_offset {
@@ -1561,6 +1597,8 @@ impl Differ {
                 }
 
                 let end_pos = (scroll_offset + viewport).min(filtered_indices.len());
+                // Keep the list simple; no visual scrollbar
+
                 for (list_idx, original_i_ref) in filtered_indices
                     .iter()
                     .enumerate()
@@ -1573,9 +1611,8 @@ impl Differ {
                     let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
                     let date_str = local_time.format("%Y-%m-%d %H:%M:%S");
 
-                    // Prefix: show mark if selected (by record_id)
-                    let is_selected = selected_ids.iter().any(|id| id == &exec.record.record_id);
-                    let prefix = if is_selected { "✓ " } else { "  " };
+                    // Fixed-width left padding (no icon)
+                    let prefix = "  ";
                     let code = exec.record.short_code.as_deref();
                     let raw_line = if let Some(code) = code {
                         format!(
@@ -1611,7 +1648,7 @@ impl Differ {
                 }
             }
 
-            // Bottom status bar: compact messages to avoid overflow
+            // Bottom status bar: compact messages to avoid overflow (no filter echo here to avoid duplication)
             let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
             let select_msg = if selected_ids.is_empty() {
                 i18n.t("status_select_first")
@@ -1621,10 +1658,8 @@ impl Differ {
                 i18n.t("selection_complete")
             };
             let status = format!(
-                "{} | {}: {} | {}",
-                Self::truncate_for_column(&select_msg, (cols as usize) / 5),
-                i18n.t("status_filter"),
-                Self::truncate_for_column(&filter_input, (cols as usize) / 2),
+                "{} | {}",
+                Self::truncate_for_column(&select_msg, (cols as usize) / 3),
                 i18n.t("status_nav_compact"),
             );
             // Move cursor to last line, clear to end, then draw the status bar
@@ -1647,7 +1682,8 @@ impl Differ {
             stdout.flush().unwrap();
 
             // Read keyboard input
-            if let Event::Key(key_event) = event::read().unwrap() {
+            match event::read().unwrap() {
+            Event::Key(key_event) => {
                 let mut toggle_selection = |step_down: bool| {
                     if filtered_indices.is_empty() {
                         return;
@@ -1690,6 +1726,7 @@ impl Differ {
                         print!("\x1b[2J\x1b[H");
                         stdout.flush().unwrap();
                         // Restore terminal settings (alt screen if used)
+                        // Mouse capture not enabled; nothing to disable here
                         if use_alt_screen {
                             print!("\x1b[?1049l");
                         }
@@ -1887,6 +1924,12 @@ impl Differ {
                     }
                     _ => {}
                 }
+            }
+            
+            Event::Resize(_,_) => { /* next loop will re-render with new size */ }
+            Event::FocusGained | Event::FocusLost => { /* ignore */ }
+            Event::Paste(_) => { /* ignore */ }
+            Event::Mouse(_) => { /* ignore */ }
             }
         }
     }

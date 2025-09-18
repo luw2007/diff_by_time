@@ -9,4 +9,8 @@
 - Docs: update README Interactive UX
 - Style: enforce English-only code comments (project rule)
 - Quality: fix clippy warnings; tests passing (9/9)
+## 0.1.2 — 2025-09-18
+- Remove experimental scrollbar and drag logic; simplify list UI
+- Keep keyboard navigation only; clarify preview toggle hint
+- Minor cleanups (comments, layout reserve lines)
 
