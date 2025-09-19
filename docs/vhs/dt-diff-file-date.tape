@@ -19,9 +19,9 @@ Type "cd $PWD"
 Enter
 
 # Prepare a demo file that will change over time
-Type "DEMO_DIR=\"/tmp/dt_demo_$$\"; mkdir -p \"$DEMO_DIR\"; DEMO_FILE=\"$DEMO_DIR/file.txt\""
+Type "DEMO_DIR=/tmp/dt_demo_$$; mkdir -p $DEMO_DIR; DEMO_FILE=$DEMO_DIR/file.txt"
 Enter
-Type "date '+%F %T' > \"$DEMO_FILE\"; echo 'alpha' >> \"$DEMO_FILE\"; cat \"$DEMO_FILE\""
+Type "date '+%F %T' > $DEMO_FILE; echo alpha >> $DEMO_FILE; cat $DEMO_FILE"
 Enter
 Sleep 600ms
 
@@ -31,7 +31,7 @@ Enter
 Sleep 1200ms
 
 # Change the file content after a short delay so the diff is visible
-Type "sleep 1; echo '---' >> \"$DEMO_FILE\"; date '+%F %T' >> \"$DEMO_FILE\"; echo 'beta' >> \"$DEMO_FILE\"; cat \"$DEMO_FILE\""
+Type "sleep 1; echo --- >> $DEMO_FILE; date '+%F %T' >> $DEMO_FILE; echo beta >> $DEMO_FILE; cat $DEMO_FILE"
 Enter
 Sleep 800ms
 
@@ -45,4 +45,3 @@ Sleep 1200ms
 Type "cargo run -- diff \"cat $DEMO_FILE\""
 Enter
 Sleep 1800ms
-
