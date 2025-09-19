@@ -8,21 +8,17 @@ Set Theme "Dracula"
 
 Output "docs/gallery/dt-diff.gif"
 
-# Ensure deterministic UI behavior
-Type "export DT_ALT_SCREEN=false"
+# Use packaged release binary
+Type "cd package"
 Enter
-Type "export LANG=en_US.UTF-8 LC_ALL=C"
-Enter
-
-# Move to project root (adjust if needed)
-Type "cd $PWD"
+Type "cd $(ls -td dt-* | head -1)"
 Enter
 
 # Seed demo data if necessary (optional, user may provide their own)
 # Type "./package/demo_seed.sh"; Enter
 
 # Launch interactive diff for a known simple command
-Type "cargo run -- diff date"
+Type "./dt diff date"
 Enter
 Sleep 800ms
 

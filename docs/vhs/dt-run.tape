@@ -8,16 +8,14 @@ Set Theme "Dracula"
 
 Output "docs/gallery/dt-run.gif"
 
-Type "export DT_ALT_SCREEN=false"
+# Use packaged release binary
+Type "cd package"
 Enter
-Type "export LANG=en_US.UTF-8 LC_ALL=C"
-Enter
-
-Type "cd $PWD"
+Type "cd $(ls -td dt-* | head -1)"
 Enter
 
 # Run and record a simple command
-Type "cargo run -- run echo hello"
+Type "./dt run echo hello"
 Enter
 Sleep 1200ms
 
