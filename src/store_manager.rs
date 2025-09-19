@@ -293,8 +293,6 @@ impl StoreManager {
         Ok(records)
     }
 
-    
-
     pub fn clean_by_query(&self, query: &str, i18n: &crate::i18n::I18n) -> Result<usize> {
         let records = self.get_all_records()?;
         let mut cleaned = 0;
@@ -531,11 +529,7 @@ mod test_support {
             Self::new_with_config_and_base_dir(config, i18n, None)
         }
 
-        pub fn backup_by_file(
-            &self,
-            file_path: &Path,
-            i18n: &crate::i18n::I18n,
-        ) -> Result<usize> {
+        pub fn backup_by_file(&self, file_path: &Path, i18n: &crate::i18n::I18n) -> Result<usize> {
             let records = self.get_all_records()?;
 
             let target_path = match fs::canonicalize(file_path) {
