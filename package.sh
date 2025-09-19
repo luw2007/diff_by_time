@@ -6,7 +6,8 @@
 set -e
 
 PROJECT_NAME="dt"
-VERSION="0.1.0"
+# Read version from Cargo.toml
+VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
 TARGET_DIR="target/release"
 BINARY_NAME="dt"
 PACKAGE_NAME="${PROJECT_NAME}-${VERSION}"
@@ -63,6 +64,18 @@ dt run -d ab "ls | head -5"
 # Compare different executions of the same command
 dt diff "ls | head -5"
 ```
+
+#### Interactive Diff UI (keys)
+- j/k or ↑/↓: move selection
+- Enter: pick first and second records to compare
+- Tab/Space: toggle select current record
+- o or ←/→: toggle preview between stdout/stderr
+- Backspace: delete last filter char
+- Delete: clear filter input
+- Esc: quit
+- Shift+Backspace or Ctrl+X: delete the highlighted record (two-press confirm)
+  - First press shows a confirmation message in the status bar
+  - Press again to permanently delete the record and refresh the list
 
 ### View history records
 ```bash

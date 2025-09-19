@@ -1,7 +1,7 @@
+mod bash_parser;
 mod config;
 mod differ;
 mod executor;
-mod bash_parser;
 mod fuzzy_matcher;
 mod i18n;
 mod storage;
@@ -18,8 +18,9 @@ use config::Config;
 use differ::Differ;
 use executor::CommandExecutor;
 use i18n::I18n;
-use store_manager::StoreManager;
 use std::fs;
+use storage::CommandExecution;
+use store_manager::StoreManager;
 
 #[derive(Parser)]
 #[command(name = "dt")]
@@ -66,7 +67,7 @@ enum Commands {
     /// Parse a Bash snippet/file to AST (tree-sitter-bash)
     Parse {
         /// File path to parse; omit to read from STDIN
-        #[arg()] 
+        #[arg()]
         file: Option<PathBuf>,
         /// Output JSON instead of outline
         #[arg(long = "json")]
@@ -231,6 +232,7 @@ fn main() -> Result<()> {
                                 .find_executions(&hash_clone, &i18n)
                                 .unwrap_or_default()
                         },
+                        Some(|exec: &CommandExecution| store_ref.delete_execution(exec, &i18n)),
                     );
                 }
                 if let Some(diff_output) = Differ::diff_executions(&executions, &i18n) {

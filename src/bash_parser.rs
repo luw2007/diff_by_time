@@ -28,7 +28,7 @@ impl BashParser {
         self.parser.parse(source, None)
     }
 
-pub fn parse_to_ast(&mut self, source: &str) -> Result<AstNode> {
+    pub fn parse_to_ast(&mut self, source: &str) -> Result<AstNode> {
         let tree = self
             .parse_to_tree(source)
             .ok_or_else(|| anyhow::anyhow!("无法解析输入为语法树"))?;

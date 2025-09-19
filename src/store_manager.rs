@@ -526,6 +526,16 @@ impl StoreManager {
         Ok(())
     }
 
+    pub fn delete_execution(
+        &self,
+        execution: &CommandExecution,
+        i18n: &crate::i18n::I18n,
+    ) -> Result<()> {
+        self.clean_record(&execution.record)?;
+        self.rebuild_index(i18n)?;
+        Ok(())
+    }
+
     fn rebuild_index(&self, i18n: &crate::i18n::I18n) -> Result<()> {
         let records_dir = self.base_dir.join("records");
         let mut all_records = Vec::new();

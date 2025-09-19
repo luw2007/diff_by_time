@@ -107,7 +107,7 @@ alt_screen = false        # Use alternate screen in interactive mode
 - Fuzzy filter: type to filter; uses substring/prefix/number priority plus skim fuzzy fallback
 - Navigation: `j/k` or arrow keys; `PgUp/PgDn`; `Ctrl-a/e` (home/end)
 - Selection: `Enter`
-- Editing: `Backspace`, `Delete`, `Ctrl-u` (clear), `Ctrl-w` (delete word)
+- Editing: `Backspace`, `Shift+Backspace` (delete record), `Delete`, `Ctrl-u` (clear), `Ctrl-w` (delete word)
 - Exit: `Esc`; `Ctrl-c/d` also exits gracefully from interactive views
 
 ## Data Storage

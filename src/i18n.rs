@@ -106,9 +106,18 @@ impl I18n {
             "Optional query to filter (substring/subsequence)".to_string(),
         );
         en.insert("help_ls_json".to_string(), "Output JSON".to_string());
-        en.insert("help_parse".to_string(), "Parse a Bash snippet/file to AST (tree-sitter-bash)".to_string());
-        en.insert("help_parse_file".to_string(), "File path to parse; omit to read from STDIN".to_string());
-        en.insert("help_parse_json".to_string(), "Output JSON instead of outline".to_string());
+        en.insert(
+            "help_parse".to_string(),
+            "Parse a Bash snippet/file to AST (tree-sitter-bash)".to_string(),
+        );
+        en.insert(
+            "help_parse_file".to_string(),
+            "File path to parse; omit to read from STDIN".to_string(),
+        );
+        en.insert(
+            "help_parse_json".to_string(),
+            "Output JSON instead of outline".to_string(),
+        );
         // Dangerous command confirmations
         en.insert(
             "confirm_clean_all_title".to_string(),
@@ -199,10 +208,31 @@ impl I18n {
 
         // Interactive selection messages
         en.insert("interactive_filter".to_string(), "Filter (type to fuzzy search, j/k to navigate, Enter to select, Delete to clear, Esc to quit)".to_string());
-        en.insert("status_select_first".to_string(), "Select first".to_string());
-        en.insert("status_select_second".to_string(), "Select second".to_string());
+        en.insert(
+            "status_select_first".to_string(),
+            "Select first".to_string(),
+        );
+        en.insert(
+            "status_select_second".to_string(),
+            "Select second".to_string(),
+        );
         en.insert("status_filter".to_string(), "Filter".to_string());
-        en.insert("status_nav_compact".to_string(), "j/k ↑/↓ Enter Del Esc".to_string());
+        en.insert(
+            "status_nav_compact".to_string(),
+            "j/k ↑/↓ Enter Shift+Backspace/Ctrl+X Del Esc".to_string(),
+        );
+        en.insert(
+            "delete_confirm_status".to_string(),
+            "Press Shift+Backspace or Ctrl+X again to delete run from {0}.".to_string(),
+        );
+        en.insert(
+            "delete_success_status".to_string(),
+            "Deleted run from {0}.".to_string(),
+        );
+        en.insert(
+            "delete_failed_status".to_string(),
+            "Failed to delete run: {0}".to_string(),
+        );
         en.insert(
             "first_selection".to_string(),
             "Select first record (press Enter to confirm):".to_string(),
@@ -578,7 +608,22 @@ impl I18n {
         zh.insert("status_select_first".to_string(), "选择首条".to_string());
         zh.insert("status_select_second".to_string(), "选择次条".to_string());
         zh.insert("status_filter".to_string(), "筛选".to_string());
-        zh.insert("status_nav_compact".to_string(), "j/k ↑/↓ Enter Del Esc".to_string());
+        zh.insert(
+            "status_nav_compact".to_string(),
+            "j/k ↑/↓ Enter Shift+Backspace/Ctrl+X Del Esc".to_string(),
+        );
+        zh.insert(
+            "delete_confirm_status".to_string(),
+            "再次按 Shift+Backspace 或 Ctrl+X 删除 {0} 的记录。".to_string(),
+        );
+        zh.insert(
+            "delete_success_status".to_string(),
+            "已删除 {0} 的记录。".to_string(),
+        );
+        zh.insert(
+            "delete_failed_status".to_string(),
+            "删除失败：{0}".to_string(),
+        );
         zh.insert(
             "first_selection".to_string(),
             "选择第一条记录 (按Enter确认):".to_string(),
@@ -648,10 +693,7 @@ impl I18n {
             "preview_toggle_hint".to_string(),
             "按 o 或 ←/→ 切换 stdout/stderr".to_string(),
         );
-        zh.insert(
-            "preview_toggle_short".to_string(),
-            "o/←/→ 切换".to_string(),
-        );
+        zh.insert("preview_toggle_short".to_string(), "o/←/→ 切换".to_string());
         zh.insert("preview_path_label".to_string(), "路径: {0}".to_string());
         zh.insert(
             "preview_path_missing".to_string(),
@@ -688,10 +730,19 @@ impl I18n {
             "using_filtered_records".to_string(),
             "使用过滤后的两个记录进行比较:".to_string(),
         );
-        // Parse help (新增)
-        zh.insert("help_parse".to_string(), "解析 Bash 片段/文件为 AST（基于 tree-sitter-bash）".to_string());
-        zh.insert("help_parse_file".to_string(), "解析的文件路径；缺省则从 STDIN 读取".to_string());
-        zh.insert("help_parse_json".to_string(), "以 JSON 输出（默认为概要树）".to_string());
+        // Parse help (new)
+        zh.insert(
+            "help_parse".to_string(),
+            "解析 Bash 片段/文件为 AST（基于 tree-sitter-bash）".to_string(),
+        );
+        zh.insert(
+            "help_parse_file".to_string(),
+            "解析的文件路径；缺省则从 STDIN 读取".to_string(),
+        );
+        zh.insert(
+            "help_parse_json".to_string(),
+            "以 JSON 输出（默认为概要树）".to_string(),
+        );
 
         // Error messages
         zh.insert(
@@ -753,13 +804,13 @@ impl I18n {
         translations.insert("en".to_string(), en);
         translations.insert("zh".to_string(), zh);
 
-        // 确定语言 - 支持多种语言代码格式
+        // Determine effective language - support multiple language code forms
         let effective_lang = if lang.starts_with("zh") || lang == "cn" || lang == "chinese" {
             "zh"
         } else if lang.starts_with("en") || lang == "english" {
             "en"
         } else {
-            // 默认使用英文
+            // Default to English
             "en"
         };
 

@@ -7,7 +7,7 @@ use chrono::{DateTime, Datelike};
 use colored::*;
 use crossterm::{
     cursor::MoveTo,
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     style::Print,
     terminal::{self},
     QueueableCommand,
@@ -66,6 +66,15 @@ impl PreviewTarget {
 }
 
 impl Differ {
+    fn is_backspace_event(key: &KeyEvent) -> bool {
+        matches!(key.code, KeyCode::Backspace)
+            || matches!(key.code, KeyCode::Char(c) if c as u32 == 8 || c as u32 == 127)
+    }
+
+    fn is_shift_backspace_event(key: &KeyEvent) -> bool {
+        key.modifiers.contains(KeyModifiers::SHIFT) && Self::is_backspace_event(key)
+    }
+
     pub fn select_prefix_for_clean(
         store: &StoreManager,
         i18n: &I18n,
@@ -148,7 +157,12 @@ impl Differ {
             if cols < MIN_TERMINAL_COLS || rows < MIN_TERMINAL_ROWS {
                 let warn = i18n.t_format(
                     "terminal_too_small",
-                    &[&MIN_TERMINAL_COLS.to_string(), &MIN_TERMINAL_ROWS.to_string(), &cols.to_string(), &rows.to_string()]
+                    &[
+                        &MIN_TERMINAL_COLS.to_string(),
+                        &MIN_TERMINAL_ROWS.to_string(),
+                        &cols.to_string(),
+                        &rows.to_string(),
+                    ],
                 );
                 print!("{}\r\n", warn);
                 stdout.flush().ok();
@@ -158,7 +172,8 @@ impl Differ {
             print!("{}\r\n", i18n.t("select_clean_command"));
             // Terminal width for prompt truncation
             let (cols, _rows) = crossterm::terminal::size().unwrap_or((80, 24));
-            let prompt = Self::truncate_for_column(&i18n.t("interactive_filter"), cols as usize - 2);
+            let prompt =
+                Self::truncate_for_column(&i18n.t("interactive_filter"), cols as usize - 2);
             print!("{}: ", prompt);
             print!("{}\r\n\r\n", filter_input);
 
@@ -351,7 +366,7 @@ impl Differ {
                         current_selection = 0;
                         scroll_offset = 0;
                     }
-                    KeyCode::Backspace => {
+                    _ if Self::is_backspace_event(&key) => {
                         filter_input.pop();
                         current_selection = 0;
                         scroll_offset = 0;
@@ -536,7 +551,7 @@ impl Differ {
                             return Ok(Some(files[i].clone()));
                         }
                     }
-                    KeyCode::Backspace => {
+                    _ if Self::is_backspace_event(&key) => {
                         filter_input.pop();
                         current_selection = 0;
                         scroll_offset = 0;
@@ -617,6 +632,7 @@ impl Differ {
                     },
                     true, // Esc returns empty => go back to command list
                     max_viewport,
+                    Some(|exec: &CommandExecution| store_ref.delete_execution(exec, i18n)),
                 );
                 if executions.is_empty() {
                     // Go back to command list
@@ -850,7 +866,7 @@ impl Differ {
                             return Some(groups[gi].command_hash.clone());
                         }
                     }
-                    KeyCode::Backspace => {
+                    _ if Self::is_backspace_event(&key) => {
                         filter_input.pop();
                         current_selection = 0;
                         scroll_offset = 0;
@@ -1202,29 +1218,41 @@ impl Differ {
         let mut row = 0u16;
         // Draw vertical separator between panels
         let sep_col = layout.start_col.saturating_sub(1);
-        for r in 0..max_rows { stdout.queue(MoveTo(sep_col, r))?; stdout.queue(Print("│".to_string()))?; }
+        for r in 0..max_rows {
+            stdout.queue(MoveTo(sep_col, r))?;
+            stdout.queue(Print("│".to_string()))?;
+        }
 
         // Header area: row 0 shows (truncated) Path; row 1 shows preview header
         let path_wrapped: Vec<String> = match exec {
             Some(execution) => {
-                let raw_path = if preview_target.is_stdout() { execution.stdout_path.as_ref() } else { execution.stderr_path.as_ref() };
+                let raw_path = if preview_target.is_stdout() {
+                    execution.stdout_path.as_ref()
+                } else {
+                    execution.stderr_path.as_ref()
+                };
                 let label = raw_path
                     .map(|p| i18n.t_format("preview_path_label", &[&p.display().to_string()]))
                     .unwrap_or_else(|| i18n.t("preview_path_missing"));
                 Self::wrap_line_to_width(&label, layout.preview_width)
             }
-            None => { let label = i18n.t("preview_path_missing"); Self::wrap_line_to_width(&label, layout.preview_width) }
+            None => {
+                let label = i18n.t("preview_path_missing");
+                Self::wrap_line_to_width(&label, layout.preview_width)
+            }
         };
         // Line 1: Path (single line, truncated)
         let first_path = path_wrapped.first().cloned().unwrap_or_default();
         let path_display = Self::truncate_for_column(&first_path, layout.preview_width);
-        stdout.queue(MoveTo(layout.start_col, row))?; stdout.queue(Print(path_display))?; row = row.saturating_add(1);
+        stdout.queue(MoveTo(layout.start_col, row))?;
+        stdout.queue(Print(path_display))?;
+        row = row.saturating_add(1);
         // Line 2: Preview header with a concise toggle hint so users discover left/right switch
         let header_with_hint = format!("{}  ·  {}", header_text, i18n.t("preview_toggle_short"));
         let header_display = Self::truncate_for_column(&header_with_hint, layout.preview_width);
-        stdout.queue(MoveTo(layout.start_col, row))?; stdout.queue(Print(header_display))?; row = row.saturating_add(1);
-
-        
+        stdout.queue(MoveTo(layout.start_col, row))?;
+        stdout.queue(Print(header_display))?;
+        row = row.saturating_add(1);
 
         for line in body_lines {
             if row >= max_rows {
@@ -1295,12 +1323,7 @@ impl Differ {
                     date_str,
                 );
             } else {
-                println!(
-                    "{}: {}: {}",
-                    i + 1,
-                    i18n.t("time_label"),
-                    date_str,
-                );
+                println!("{}: {}: {}", i + 1, i18n.t("time_label"), date_str,);
             }
         }
 
@@ -1365,19 +1388,22 @@ impl Differ {
             || executions.to_vec(),
             false,
             None,
+            None::<fn(&CommandExecution) -> Result<()>>,
         )
     }
 
-    pub fn interactive_select_executions_with_loader<F>(
+    pub fn interactive_select_executions_with_loader<F, D>(
         executions: &[CommandExecution],
         i18n: &I18n,
         tui_simple: bool,
         use_alt_screen: bool,
         max_viewport: Option<usize>,
         loader: F,
+        delete_action: Option<D>,
     ) -> Vec<CommandExecution>
     where
         F: FnMut() -> Vec<CommandExecution>,
+        D: FnMut(&CommandExecution) -> Result<()>,
     {
         if tui_simple {
             return Self::simple_select_executions(executions, i18n);
@@ -1389,19 +1415,22 @@ impl Differ {
             loader,
             false,
             max_viewport,
+            delete_action,
         )
     }
 
-    fn start_interactive_selection_impl<F>(
+    fn start_interactive_selection_impl<F, D>(
         executions: &[CommandExecution],
         i18n: &I18n,
         use_alt_screen: bool,
         mut loader: F,
         on_escape_return_empty: bool,
         max_viewport: Option<usize>,
+        mut delete_action: Option<D>,
     ) -> Vec<CommandExecution>
     where
         F: FnMut() -> Vec<CommandExecution>,
+        D: FnMut(&CommandExecution) -> Result<()>,
     {
         let mut stdout = io::stdout();
 
@@ -1436,6 +1465,8 @@ impl Differ {
         let mut current_selection = 0;
         let mut scroll_offset: usize = 0;
         let mut preview_target = PreviewTarget::Stdout;
+        let mut pending_delete: Option<CommandExecution> = None;
+        let mut last_action_message: Option<String> = None;
 
         // Dataset (may reload on input)
         let mut current_execs: Vec<CommandExecution> = executions.to_vec();
@@ -1450,7 +1481,12 @@ impl Differ {
             if cols < MIN_TERMINAL_COLS || rows < MIN_TERMINAL_ROWS {
                 let warn = i18n.t_format(
                     "terminal_too_small",
-                    &[&MIN_TERMINAL_COLS.to_string(), &MIN_TERMINAL_ROWS.to_string(), &cols.to_string(), &rows.to_string()]
+                    &[
+                        &MIN_TERMINAL_COLS.to_string(),
+                        &MIN_TERMINAL_ROWS.to_string(),
+                        &cols.to_string(),
+                        &rows.to_string(),
+                    ],
                 );
                 print!("{}\r\n", warn);
                 stdout.flush().ok();
@@ -1498,65 +1534,62 @@ impl Differ {
                 matched_items.into_iter().map(|(i, _, _)| i).collect()
             };
 
-                // After we have filtered items, adapt the left panel width
-                if let Some(ref mut lay) = layout {
-                    // Measure max display width of visible lines (without truncation)
-                    use unicode_width::UnicodeWidthStr;
-                    let mut max_w = 0usize;
-                    let prefix_width = 2; // space for current selected mark "✓ " or two spaces
-                    let end_pos_probe = (
-                        scroll_offset
-                            + if let Some(mv) = max_viewport { mv.max(3) } else { rows as usize }
-                    )
-                    .min(filtered_indices.len());
-                    for original_i in filtered_indices
-                        .iter()
-                        .cloned()
-                        .skip(scroll_offset)
-                        .take(end_pos_probe.saturating_sub(scroll_offset))
-                    {
-                        let exec = &display_executions[original_i];
-                        let actual_index = original_i + 1;
-                        let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
-                        let date_str = local_time.format("%Y-%m-%d %H:%M:%S").to_string();
-                        let code = exec.record.short_code.as_deref();
-                        let raw_line = if let Some(code) = code {
-                            format!(
-                                "{}: {}:{} {}: {}",
-                                actual_index,
-                                i18n.t("short_code_label"),
-                                code,
-                                i18n.t("time_label"),
-                                date_str,
-                            )
-                        } else {
-                            format!(
-                                "{}: {}: {}",
-                                actual_index,
-                                i18n.t("time_label"),
-                                date_str,
-                            )
-                        };
-                        let w = prefix_width + UnicodeWidthStr::width(raw_line.as_str());
-                        if w > max_w {
-                            max_w = w;
-                        }
+            // After we have filtered items, adapt the left panel width
+            if let Some(ref mut lay) = layout {
+                // Measure max display width of visible lines (without truncation)
+                use unicode_width::UnicodeWidthStr;
+                let mut max_w = 0usize;
+                let prefix_width = 2; // space for current selected mark "✓ " or two spaces
+                let end_pos_probe = (scroll_offset
+                    + if let Some(mv) = max_viewport {
+                        mv.max(3)
+                    } else {
+                        rows as usize
+                    })
+                .min(filtered_indices.len());
+                for original_i in filtered_indices
+                    .iter()
+                    .cloned()
+                    .skip(scroll_offset)
+                    .take(end_pos_probe.saturating_sub(scroll_offset))
+                {
+                    let exec = &display_executions[original_i];
+                    let actual_index = original_i + 1;
+                    let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
+                    let date_str = local_time.format("%Y-%m-%d %H:%M:%S").to_string();
+                    let code = exec.record.short_code.as_deref();
+                    let raw_line = if let Some(code) = code {
+                        format!(
+                            "{}: {}:{} {}: {}",
+                            actual_index,
+                            i18n.t("short_code_label"),
+                            code,
+                            i18n.t("time_label"),
+                            date_str,
+                        )
+                    } else {
+                        format!("{}: {}: {}", actual_index, i18n.t("time_label"), date_str,)
+                    };
+                    let w = prefix_width + UnicodeWidthStr::width(raw_line.as_str());
+                    if w > max_w {
+                        max_w = w;
                     }
-                    // Clamp left width between 20 and 45% of total columns, plus small padding
-                    let total_cols = cols as usize;
-                    let pad = 2usize;
-                    let min_left = PREVIEW_LEFT_MIN_WIDTH.max(20);
-                    let max_left = (total_cols as f32 * 0.45) as usize;
-                    let desired = (max_w + pad).max(min_left).min(max_left);
-                    // Ensure right side keeps its minimum width
-                    let allowed_left = desired.min(total_cols.saturating_sub(PREVIEW_RIGHT_MIN_WIDTH));
-                    lay.left_width = allowed_left;
-                    lay.start_col = (lay.left_width + 2).min(u16::MAX as usize) as u16;
-                    lay.preview_width = total_cols.saturating_sub(lay.left_width + 2);
                 }
+                // Clamp left width between 20 and 45% of total columns, plus small padding
+                let total_cols = cols as usize;
+                let pad = 2usize;
+                let min_left = PREVIEW_LEFT_MIN_WIDTH.max(20);
+                let max_left = (total_cols as f32 * 0.45) as usize;
+                let desired = (max_w + pad).max(min_left).min(max_left);
+                // Ensure right side keeps its minimum width
+                let allowed_left = desired.min(total_cols.saturating_sub(PREVIEW_RIGHT_MIN_WIDTH));
+                lay.left_width = allowed_left;
+                lay.start_col = (lay.left_width + 2).min(u16::MAX as usize) as u16;
+                lay.preview_width = total_cols.saturating_sub(lay.left_width + 2);
+            }
 
-                // Display filtered records
-                if filtered_indices.is_empty() {
+            // Display filtered records
+            if filtered_indices.is_empty() {
                 // Red text when nothing matches
                 print!("\x1b[31m{}\x1b[0m\r\n", i18n.t("no_matches"));
             } else {
@@ -1657,13 +1690,18 @@ impl Differ {
             } else {
                 i18n.t("selection_complete")
             };
-            let status = format!(
-                "{} | {}",
-                Self::truncate_for_column(&select_msg, (cols as usize) / 3),
-                i18n.t("status_nav_compact"),
-            );
+            let select_part = Self::truncate_for_column(&select_msg, (cols as usize) / 3);
+            let mut status = format!("{} | {}", select_part, i18n.t("status_nav_compact"));
+            if let Some(msg) = &last_action_message {
+                status.push_str(" | ");
+                status.push_str(msg);
+            }
             // Move cursor to last line, clear to end, then draw the status bar
-            print!("\x1b[{};1H\x1b[90m{}\x1b[0m\x1b[K", rows, Self::truncate_for_column(&status, cols as usize));
+            print!(
+                "\x1b[{};1H\x1b[90m{}\x1b[0m\x1b[K",
+                rows,
+                Self::truncate_for_column(&status, cols as usize),
+            );
 
             if let Some(ref layout) = layout {
                 let preview_exec = filtered_indices
@@ -1682,254 +1720,396 @@ impl Differ {
             stdout.flush().unwrap();
 
             // Read keyboard input
-            match event::read().unwrap() {
-            Event::Key(key_event) => {
-                let mut toggle_selection = |step_down: bool| {
-                    if filtered_indices.is_empty() {
-                        return;
-                    }
-                    let oi = filtered_indices[current_selection];
-                    let ex = &display_executions[oi];
-                    if let Some(pos) = selected_ids
-                        .iter()
-                        .position(|id| id == &ex.record.record_id)
-                    {
-                        selected_ids.remove(pos);
-                    } else {
-                        selected_ids.push(ex.record.record_id.clone());
-                    }
-                    if step_down {
-                        let max_idx = filtered_indices.len().saturating_sub(1);
-                        if current_selection < max_idx {
-                            current_selection += 1;
-                        }
-                    }
-                };
+            let mut clear_pending_delete = || {
+                if pending_delete.is_some() {
+                    pending_delete = None;
+                    last_action_message = None;
+                }
+            };
 
-                // Handle Ctrl+C / Ctrl+D for exit (modifiers or control chars)
-                let is_ctrl_combo = key_event.modifiers.contains(KeyModifiers::CONTROL);
-                let is_ctrl_char = match key_event.code {
-                    KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}' => true, // ETX (^C) or EOT (^D)
-                    _ => false,
-                };
-                if is_ctrl_combo || is_ctrl_char {
-                    let exit_match = match key_event.code {
-                        KeyCode::Char('c')
-                        | KeyCode::Char('C')
-                        | KeyCode::Char('d')
-                        | KeyCode::Char('D') => true,
-                        KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}' => true,
+            match event::read().unwrap() {
+                Event::Key(key_event) => {
+                    let mut toggle_selection = |step_down: bool| {
+                        if filtered_indices.is_empty() {
+                            return;
+                        }
+                        let oi = filtered_indices[current_selection];
+                        let ex = &display_executions[oi];
+                        if let Some(pos) = selected_ids
+                            .iter()
+                            .position(|id| id == &ex.record.record_id)
+                        {
+                            selected_ids.remove(pos);
+                        } else {
+                            selected_ids.push(ex.record.record_id.clone());
+                        }
+                        if step_down {
+                            let max_idx = filtered_indices.len().saturating_sub(1);
+                            if current_selection < max_idx {
+                                current_selection += 1;
+                            }
+                        }
+                    };
+
+                    // Handle Ctrl+C / Ctrl+D for exit (modifiers or control chars)
+                    let is_ctrl_combo = key_event.modifiers.contains(KeyModifiers::CONTROL);
+                    let is_ctrl_char = match key_event.code {
+                        KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}' => true, // ETX (^C) or EOT (^D)
                         _ => false,
                     };
-                    if exit_match {
-                        // Exit without selection (return empty result)
-                        print!("\x1b[2J\x1b[H");
-                        stdout.flush().unwrap();
-                        // Restore terminal settings (alt screen if used)
-                        // Mouse capture not enabled; nothing to disable here
-                        if use_alt_screen {
-                            print!("\x1b[?1049l");
-                        }
-                        print!("\x1b[?7h\x1b[?25h");
-                        stdout.flush().ok();
-                        let _ = terminal::disable_raw_mode();
-                        return Vec::new();
-                    }
-                }
-
-                match key_event.code {
-                    // Navigation keys
-                    KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                        // Move selection up
-                        current_selection = current_selection.saturating_sub(1);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                        // Move selection down
-                        if !filtered_indices.is_empty()
-                            && current_selection < filtered_indices.len() - 1
-                        {
-                            current_selection += 1;
-                        }
-                    }
-                    // Ctrl-p / Ctrl-n
-                    KeyCode::Char('p') if is_ctrl_combo => {
-                        current_selection = current_selection.saturating_sub(1);
-                    }
-                    KeyCode::Char('n') if is_ctrl_combo => {
-                        if !filtered_indices.is_empty()
-                            && current_selection < filtered_indices.len() - 1
-                        {
-                            current_selection += 1;
-                        }
-                    }
-                    // PageDown / Ctrl-f, PageUp / Ctrl-b
-                    KeyCode::PageDown | KeyCode::Char('f') if is_ctrl_combo => {
-                        if !filtered_indices.is_empty() {
-                            let viewport = if let Some(mv) = max_viewport {
-                                mv.max(3)
-                            } else {
-                                let (_c, r) = crossterm::terminal::size().unwrap_or((80, 24));
-                                let mut v = r as usize;
-                                v = v.saturating_sub(6);
-                                if v < 5 {
-                                    v = 5;
-                                }
-                                v
-                            };
-                            let max_idx = filtered_indices.len().saturating_sub(1);
-                            current_selection = (current_selection + viewport).min(max_idx);
-                        }
-                    }
-                    KeyCode::PageUp | KeyCode::Char('b') if is_ctrl_combo => {
-                        if !filtered_indices.is_empty() {
-                            let viewport = if let Some(mv) = max_viewport {
-                                mv.max(3)
-                            } else {
-                                let (_c, r) = crossterm::terminal::size().unwrap_or((80, 24));
-                                let mut v = r as usize;
-                                v = v.saturating_sub(6);
-                                if v < 5 {
-                                    v = 5;
-                                }
-                                v
-                            };
-                            current_selection = current_selection.saturating_sub(viewport);
-                        }
-                    }
-                    // Home/End and Ctrl-a / Ctrl-e
-                    KeyCode::Home | KeyCode::Char('a') if is_ctrl_combo => {
-                        current_selection = 0;
-                    }
-                    KeyCode::End | KeyCode::Char('e') if is_ctrl_combo => {
-                        if !filtered_indices.is_empty() {
-                            current_selection = filtered_indices.len() - 1;
-                        }
-                    }
-                    // Control keys
-                    KeyCode::Enter => {
-                        // If already marked two, confirm and exit; otherwise mark current and exit if two.
-                        if !filtered_indices.is_empty() {
-                            if selected_ids.len() >= 2 {
-                                // finalize immediately
-                            } else {
-                                let oi = filtered_indices[current_selection];
-                                let ex = &display_executions[oi];
-                                if !selected_ids.iter().any(|id| id == &ex.record.record_id) {
-                                    selected_ids.push(ex.record.record_id.clone());
-                                }
+                    if is_ctrl_combo || is_ctrl_char {
+                        let exit_match = match key_event.code {
+                            KeyCode::Char('c')
+                            | KeyCode::Char('C')
+                            | KeyCode::Char('d')
+                            | KeyCode::Char('D') => true,
+                            KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}' => true,
+                            _ => false,
+                        };
+                        if exit_match {
+                            // Exit without selection (return empty result)
+                            print!("\x1b[2J\x1b[H");
+                            stdout.flush().unwrap();
+                            // Restore terminal settings (alt screen if used)
+                            // Mouse capture not enabled; nothing to disable here
+                            if use_alt_screen {
+                                print!("\x1b[?1049l");
                             }
+                            print!("\x1b[?7h\x1b[?25h");
+                            stdout.flush().ok();
+                            let _ = terminal::disable_raw_mode();
+                            return Vec::new();
+                        }
+                    }
 
-                            if selected_ids.len() >= 2 {
-                                print!("\x1b[2J\x1b[H");
-                                print!("\x1b[32m{}\x1b[0m\r\n", i18n.t("selection_complete"));
-                                stdout.flush().unwrap();
-                                if use_alt_screen {
-                                    print!("\x1b[?1049l");
-                                }
-                                print!("\x1b[?7h\x1b[?25h");
-                                stdout.flush().ok();
-                                terminal::disable_raw_mode().unwrap();
-
-                                let mut result = Vec::new();
-                                for sid in &selected_ids {
-                                    if let Some(exec) =
-                                        current_execs.iter().find(|e| &e.record.record_id == sid)
-                                    {
-                                        result.push(exec.clone());
+                    match key_event.code {
+                        // Navigation keys
+                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
+                            clear_pending_delete();
+                            // Move selection up
+                            current_selection = current_selection.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
+                            clear_pending_delete();
+                            // Move selection down
+                            if !filtered_indices.is_empty()
+                                && current_selection < filtered_indices.len() - 1
+                            {
+                                current_selection += 1;
+                            }
+                        }
+                        // Ctrl-p / Ctrl-n
+                        KeyCode::Char('p') if is_ctrl_combo => {
+                            clear_pending_delete();
+                            current_selection = current_selection.saturating_sub(1);
+                        }
+                        KeyCode::Char('n') if is_ctrl_combo => {
+                            clear_pending_delete();
+                            if !filtered_indices.is_empty()
+                                && current_selection < filtered_indices.len() - 1
+                            {
+                                current_selection += 1;
+                            }
+                        }
+                        // PageDown / Ctrl-f, PageUp / Ctrl-b
+                        KeyCode::PageDown | KeyCode::Char('f') if is_ctrl_combo => {
+                            clear_pending_delete();
+                            if !filtered_indices.is_empty() {
+                                let viewport = if let Some(mv) = max_viewport {
+                                    mv.max(3)
+                                } else {
+                                    let (_c, r) = crossterm::terminal::size().unwrap_or((80, 24));
+                                    let mut v = r as usize;
+                                    v = v.saturating_sub(6);
+                                    if v < 5 {
+                                        v = 5;
+                                    }
+                                    v
+                                };
+                                let max_idx = filtered_indices.len().saturating_sub(1);
+                                current_selection = (current_selection + viewport).min(max_idx);
+                            }
+                        }
+                        KeyCode::PageUp | KeyCode::Char('b') if is_ctrl_combo => {
+                            clear_pending_delete();
+                            if !filtered_indices.is_empty() {
+                                let viewport = if let Some(mv) = max_viewport {
+                                    mv.max(3)
+                                } else {
+                                    let (_c, r) = crossterm::terminal::size().unwrap_or((80, 24));
+                                    let mut v = r as usize;
+                                    v = v.saturating_sub(6);
+                                    if v < 5 {
+                                        v = 5;
+                                    }
+                                    v
+                                };
+                                current_selection = current_selection.saturating_sub(viewport);
+                            }
+                        }
+                        // Home/End and Ctrl-a / Ctrl-e
+                        KeyCode::Home | KeyCode::Char('a') if is_ctrl_combo => {
+                            current_selection = 0;
+                        }
+                        KeyCode::End | KeyCode::Char('e') if is_ctrl_combo => {
+                            if !filtered_indices.is_empty() {
+                                current_selection = filtered_indices.len() - 1;
+                            }
+                        }
+                        // Control keys
+                        KeyCode::Enter => {
+                            // If already marked two, confirm and exit; otherwise mark current and exit if two.
+                            if !filtered_indices.is_empty() {
+                                if selected_ids.len() >= 2 {
+                                    // finalize immediately
+                                } else {
+                                    let oi = filtered_indices[current_selection];
+                                    let ex = &display_executions[oi];
+                                    if !selected_ids.iter().any(|id| id == &ex.record.record_id) {
+                                        selected_ids.push(ex.record.record_id.clone());
                                     }
                                 }
-                                result.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
-                                return result;
+
+                                if selected_ids.len() >= 2 {
+                                    print!("\x1b[2J\x1b[H");
+                                    print!("\x1b[32m{}\x1b[0m\r\n", i18n.t("selection_complete"));
+                                    stdout.flush().unwrap();
+                                    if use_alt_screen {
+                                        print!("\x1b[?1049l");
+                                    }
+                                    print!("\x1b[?7h\x1b[?25h");
+                                    stdout.flush().ok();
+                                    terminal::disable_raw_mode().unwrap();
+
+                                    let mut result = Vec::new();
+                                    for sid in &selected_ids {
+                                        if let Some(exec) = current_execs
+                                            .iter()
+                                            .find(|e| &e.record.record_id == sid)
+                                        {
+                                            result.push(exec.clone());
+                                        }
+                                    }
+                                    result.sort_by(|a, b| {
+                                        a.record.timestamp.cmp(&b.record.timestamp)
+                                    });
+                                    return result;
+                                }
                             }
                         }
-                    }
-                    // Tab: toggle mark; BackTab: toggle and move down one
-                    KeyCode::Tab | KeyCode::BackTab => {
-                        let step_down = matches!(key_event.code, KeyCode::BackTab);
-                        toggle_selection(step_down);
-                    }
-                    KeyCode::Char(' ') => {
-                        toggle_selection(false);
-                    }
-                    KeyCode::Esc => {
-                        // Exit and return default selection
-                        // Clear screen and move cursor to top
-                        print!("\x1b[2J\x1b[H");
-                        stdout.flush().unwrap();
-                        // Restore terminal settings
-                        if use_alt_screen {
-                            print!("\x1b[?1049l");
+                        // Tab: toggle mark; BackTab: toggle and move down one
+                        KeyCode::Tab | KeyCode::BackTab => {
+                            let step_down = matches!(key_event.code, KeyCode::BackTab);
+                            toggle_selection(step_down);
                         }
-                        print!("\x1b[?7h\x1b[?25h");
-                        stdout.flush().ok();
-                        terminal::disable_raw_mode().unwrap();
-                        if on_escape_return_empty {
-                            return Vec::new();
-                        } else {
-                            return executions.iter().take(2).cloned().collect();
+                        KeyCode::Char(' ') => {
+                            toggle_selection(false);
                         }
-                    }
-                    // Clear/kill editing bindings
-                    KeyCode::Char('u') if is_ctrl_combo => {
-                        filter_input.clear();
-                        current_selection = 0;
-                        scroll_offset = 0;
-                        current_execs = loader();
-                        display_executions = current_execs.iter().collect();
-                    }
-                    KeyCode::Char('w') if is_ctrl_combo => {
-                        while filter_input.ends_with(char::is_whitespace) {
+                        KeyCode::Esc => {
+                            // Exit and return default selection
+                            // Clear screen and move cursor to top
+                            print!("\x1b[2J\x1b[H");
+                            stdout.flush().unwrap();
+                            // Restore terminal settings
+                            if use_alt_screen {
+                                print!("\x1b[?1049l");
+                            }
+                            print!("\x1b[?7h\x1b[?25h");
+                            stdout.flush().ok();
+                            terminal::disable_raw_mode().unwrap();
+                            if on_escape_return_empty {
+                                return Vec::new();
+                            } else {
+                                return executions.iter().take(2).cloned().collect();
+                            }
+                        }
+                        // Clear/kill editing bindings
+                        KeyCode::Char('u') if is_ctrl_combo => {
+                            filter_input.clear();
+                            current_selection = 0;
+                            scroll_offset = 0;
+                            current_execs = loader();
+                            display_executions = current_execs.iter().collect();
+                        }
+                        KeyCode::Char('w') if is_ctrl_combo => {
+                            while filter_input.ends_with(char::is_whitespace) {
+                                filter_input.pop();
+                            }
+                            while !filter_input.is_empty()
+                                && !filter_input.ends_with(char::is_whitespace)
+                            {
+                                filter_input.pop();
+                            }
+                            current_selection = 0;
+                            scroll_offset = 0;
+                            current_execs = loader();
+                            display_executions = current_execs.iter().collect();
+                        }
+                        _ if Self::is_shift_backspace_event(&key_event) => {
+                            if delete_action.is_none() {
+                                clear_pending_delete();
+                                filter_input.pop();
+                                current_selection = 0;
+                                scroll_offset = 0;
+                                current_execs = loader();
+                                display_executions = current_execs.iter().collect();
+                            } else if filtered_indices.is_empty() {
+                                clear_pending_delete();
+                                last_action_message = Some(i18n.t("delete_nothing"));
+                            } else {
+                                let oi = filtered_indices[current_selection];
+                                let target_ref = display_executions[oi];
+                                let timestamp_display = target_ref
+                                    .record
+                                    .timestamp
+                                    .with_timezone(&chrono::Local)
+                                    .format("%Y-%m-%d %H:%M:%S")
+                                    .to_string();
+                                let record_id = target_ref.record.record_id.clone();
+                                let target_exec = (*target_ref).clone();
+
+                                if pending_delete.as_ref().map(|p| p.record.record_id.as_str())
+                                    == Some(record_id.as_str())
+                                {
+                                    if let Some(delete_fn) = delete_action.as_mut() {
+                                        match delete_fn(&target_exec) {
+                                            Ok(()) => {
+                                                selected_ids.retain(|id| id != &record_id);
+                                                pending_delete = None;
+                                                last_action_message = Some(i18n.t_format(
+                                                    "delete_success_status",
+                                                    &[&timestamp_display],
+                                                ));
+                                                current_execs = loader();
+                                                display_executions = current_execs.iter().collect();
+                                                let total_items = display_executions.len();
+                                                if total_items == 0 {
+                                                    current_selection = 0;
+                                                } else if current_selection >= total_items {
+                                                    current_selection = total_items - 1;
+                                                }
+                                                scroll_offset = 0;
+                                            }
+                                            Err(err) => {
+                                                pending_delete = Some(target_exec);
+                                                last_action_message = Some(i18n.t_format(
+                                                    "delete_failed_status",
+                                                    &[&err.to_string()],
+                                                ));
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    pending_delete = Some(target_exec);
+                                    last_action_message =
+                                        Some(i18n.t_format(
+                                            "delete_confirm_status",
+                                            &[&timestamp_display],
+                                        ));
+                                }
+                            }
+                        }
+                        // Ctrl+X behaves like Shift+Backspace (delete current record with confirm)
+                        KeyCode::Char('x') if is_ctrl_combo => {
+                            if delete_action.is_none() {
+                                clear_pending_delete();
+                                // When deletion is not available in this screen, treat as no-op
+                            } else if filtered_indices.is_empty() {
+                                clear_pending_delete();
+                                last_action_message = Some(i18n.t("delete_nothing"));
+                            } else {
+                                let oi = filtered_indices[current_selection];
+                                let target_ref = display_executions[oi];
+                                let timestamp_display = target_ref
+                                    .record
+                                    .timestamp
+                                    .with_timezone(&chrono::Local)
+                                    .format("%Y-%m-%d %H:%M:%S")
+                                    .to_string();
+                                let record_id = target_ref.record.record_id.clone();
+                                let target_exec = (*target_ref).clone();
+
+                                if pending_delete.as_ref().map(|p| p.record.record_id.as_str())
+                                    == Some(record_id.as_str())
+                                {
+                                    if let Some(delete_fn) = delete_action.as_mut() {
+                                        match delete_fn(&target_exec) {
+                                            Ok(()) => {
+                                                selected_ids.retain(|id| id != &record_id);
+                                                pending_delete = None;
+                                                last_action_message = Some(i18n.t_format(
+                                                    "delete_success_status",
+                                                    &[&timestamp_display],
+                                                ));
+                                                current_execs = loader();
+                                                display_executions = current_execs.iter().collect();
+                                                let total_items = display_executions.len();
+                                                if total_items == 0 {
+                                                    current_selection = 0;
+                                                } else if current_selection >= total_items {
+                                                    current_selection = total_items - 1;
+                                                }
+                                                scroll_offset = 0;
+                                            }
+                                            Err(err) => {
+                                                pending_delete = Some(target_exec);
+                                                last_action_message = Some(i18n.t_format(
+                                                    "delete_failed_status",
+                                                    &[&err.to_string()],
+                                                ));
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    pending_delete = Some(target_exec);
+                                    last_action_message = Some(i18n.t_format(
+                                        "delete_confirm_status",
+                                        &[&timestamp_display],
+                                    ));
+                                }
+                            }
+                        }
+                        _ if Self::is_backspace_event(&key_event) => {
+                            clear_pending_delete();
                             filter_input.pop();
+                            current_selection = 0;
+                            scroll_offset = 0;
+                            current_execs = loader();
+                            display_executions = current_execs.iter().collect();
                         }
-                        while !filter_input.is_empty()
-                            && !filter_input.ends_with(char::is_whitespace)
-                        {
-                            filter_input.pop();
+                        KeyCode::Delete => {
+                            // Clear filter input and reset view
+                            filter_input.clear();
+                            current_selection = 0;
+                            scroll_offset = 0;
+                            // Reload dataset on input
+                            current_execs = loader();
+                            display_executions = current_execs.iter().collect();
                         }
-                        current_selection = 0;
-                        scroll_offset = 0;
-                        current_execs = loader();
-                        display_executions = current_execs.iter().collect();
+                        KeyCode::Left
+                        | KeyCode::Right
+                        | KeyCode::Char('o')
+                        | KeyCode::Char('O') => {
+                            preview_target = preview_target.toggle();
+                        }
+                        // Character input
+                        KeyCode::Char(c) => {
+                            // Add character to filter input and reset view
+                            filter_input.push(c);
+                            current_selection = 0;
+                            scroll_offset = 0;
+                            // Reload dataset on input
+                            current_execs = loader();
+                            display_executions = current_execs.iter().collect();
+                        }
+                        _ => {}
                     }
-                    KeyCode::Backspace => {
-                        // Delete last character and reset view
-                        filter_input.pop();
-                        current_selection = 0;
-                        scroll_offset = 0;
-                        // Reload dataset on input
-                        current_execs = loader();
-                        display_executions = current_execs.iter().collect();
-                    }
-                    KeyCode::Delete => {
-                        // Clear filter input and reset view
-                        filter_input.clear();
-                        current_selection = 0;
-                        scroll_offset = 0;
-                        // Reload dataset on input
-                        current_execs = loader();
-                        display_executions = current_execs.iter().collect();
-                    }
-                    KeyCode::Left | KeyCode::Right | KeyCode::Char('o') | KeyCode::Char('O') => {
-                        preview_target = preview_target.toggle();
-                    }
-                    // Character input
-                    KeyCode::Char(c) => {
-                        // Add character to filter input and reset view
-                        filter_input.push(c);
-                        current_selection = 0;
-                        scroll_offset = 0;
-                        // Reload dataset on input
-                        current_execs = loader();
-                        display_executions = current_execs.iter().collect();
-                    }
-                    _ => {}
                 }
-            }
-            
-            Event::Resize(_,_) => { /* next loop will re-render with new size */ }
-            Event::FocusGained | Event::FocusLost => { /* ignore */ }
-            Event::Paste(_) => { /* ignore */ }
-            Event::Mouse(_) => { /* ignore */ }
+
+                Event::Resize(_, _) => { /* next loop will re-render with new size */ }
+                Event::FocusGained | Event::FocusLost => { /* ignore */ }
+                Event::Paste(_) => { /* ignore */ }
+                Event::Mouse(_) => { /* ignore */ }
             }
         }
     }
@@ -1961,12 +2141,7 @@ impl Differ {
                     date_str,
                 );
             } else {
-                println!(
-                    "{}: {}: {}",
-                    i + 1,
-                    i18n.t("time_label"),
-                    date_str,
-                );
+                println!("{}: {}: {}", i + 1, i18n.t("time_label"), date_str,);
             }
         }
 
