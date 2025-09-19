@@ -1464,8 +1464,6 @@ impl Differ {
         result
     }
 
-    
-
     #[allow(clippy::too_many_arguments)]
     pub fn interactive_select_executions_with_loader<F, D>(
         executions: &[CommandExecution],
