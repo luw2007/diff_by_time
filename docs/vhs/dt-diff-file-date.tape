@@ -22,7 +22,7 @@ Enter
 Sleep 600ms
 
 # Record first run
-Type "cargo run -- run \"cat /tmp/dt_demo_vhs/file.txt\""
+Type "cargo run -- run cat /tmp/dt_demo_vhs/file.txt"
 Enter
 Sleep 1200ms
 
@@ -32,12 +32,12 @@ Enter
 Sleep 800ms
 
 # Record second run
-Type "cargo run -- run \"cat /tmp/dt_demo_vhs/file.txt\""
+Type "cargo run -- run cat /tmp/dt_demo_vhs/file.txt"
 Enter
 Sleep 1200ms
 
 # Show the diff between the two runs of the same command
 # Since there are exactly two records, dt diff will render the diff directly
-Type "cargo run -- diff \"cat /tmp/dt_demo_vhs/file.txt\""
+Type "cargo run -- diff cat /tmp/dt_demo_vhs/file.txt"
 Enter
 Sleep 1800ms
