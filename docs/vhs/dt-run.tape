@@ -17,7 +17,7 @@ Type "cd $PWD"
 Enter
 
 # Run and record a simple command
-Type "cargo run -- run \"echo hello\""
+Type "cargo run -- run echo hello"
 Enter
 Sleep 1200ms
 
