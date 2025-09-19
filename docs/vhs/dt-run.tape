@@ -8,12 +8,11 @@ Set Theme "Dracula"
 
 Output "docs/gallery/dt-run.gif"
 
-# Use packaged release binary via stable symlink
-
-# Run and record a simple command
-Type "./package/latest/dt run echo hello"
+# Data is prepared by scripts/demo_prep.sh (baseline 'a' for date).
+# Run twice with -d a to immediately show diffs.
+Type "./package/latest/dt run -d a date"
 Enter
-Sleep 1200ms
-
-# Exit after message
-Sleep 400ms
+Sleep 900ms
+Type "./package/latest/dt run -d a date"
+Enter
+Sleep 900ms

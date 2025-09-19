@@ -44,8 +44,7 @@ prep_diff_date() {
   echo "[prep] Preparing simple date diff demo..."
   ensure_dt
   clean_query "date"
-  ./package/latest/dt run date >/dev/null
-  sleep 1
+  # Create only the initial baseline run so code 'a' exists.
   ./package/latest/dt run date >/dev/null
 }
 
@@ -57,4 +56,3 @@ case "$MODE" in
 esac
 
 echo "[prep] Done."
-
