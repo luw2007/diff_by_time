@@ -8,6 +8,7 @@ MODE=${1:-all}
 
 here() { cd "$(dirname "$0")/.."; }
 have_dt() { [[ -x ./package/latest/dt ]]; }
+DATA_DIR=${DT_DEMO_DATA_DIR:-/tmp/dt_demo_data}
 
 ensure_dt() {
   here
@@ -20,7 +21,7 @@ ensure_dt() {
 clean_query() {
   # Clean records matching a query string (auto-confirm)
   local q="$1"
-  printf "YES\n" | ./package/latest/dt clean search "$q" >/dev/null || true
+  printf "YES\n" | ./package/latest/dt --data-dir "$DATA_DIR" clean search "$q" >/dev/null || true
 }
 
 prep_diff_file_date() {
@@ -34,10 +35,10 @@ prep_diff_file_date() {
   clean_query "cat $FILE"
   # First snapshot
   date '+%F %T' > "$FILE"; echo alpha >> "$FILE"
-  ./package/latest/dt run cat "$FILE" >/dev/null
+  ./package/latest/dt --data-dir "$DATA_DIR" run cat "$FILE" >/dev/null
   # Second snapshot with visible changes
   sleep 1; echo --- >> "$FILE"; date '+%F %T' >> "$FILE"; echo beta >> "$FILE"
-  ./package/latest/dt run cat "$FILE" >/dev/null
+  ./package/latest/dt --data-dir "$DATA_DIR" run cat "$FILE" >/dev/null
 }
 
 prep_diff_date() {
@@ -45,7 +46,7 @@ prep_diff_date() {
   ensure_dt
   clean_query "date"
   # Create only the initial baseline run so code 'a' exists.
-  ./package/latest/dt run date >/dev/null
+  ./package/latest/dt --data-dir "$DATA_DIR" run date >/dev/null
 }
 
 case "$MODE" in

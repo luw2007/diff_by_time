@@ -17,6 +17,10 @@ echo "📦 Start packaging ${PROJECT_NAME} v${VERSION}..."
 # Create package directory
 mkdir -p "package/${PACKAGE_NAME}"
 
+# Build release binary to ensure latest changes are packaged
+echo "🔨 Building release binary..."
+cargo build --release >/dev/null
+
 # Copy binary
 echo "📋 Copying binary..."
 cp "${TARGET_DIR}/${BINARY_NAME}" "package/${PACKAGE_NAME}/"
@@ -112,6 +116,16 @@ auto_archive = true        # Auto archive
 [display]
 max_history_shown = 10     # Maximum history records to show
 language = "auto"          # Language setting (auto/en/zh)
+```
+
+## Data Directory
+
+By default dt stores data under `~/.dt/`. To isolate environments (e.g., for demos/tests), override the data directory:
+
+```bash
+# Use a custom directory for index and records
+dt --data-dir /tmp/dt_demo_data run "date"
+dt --data-dir /tmp/dt_demo_data diff "date"
 ```
 
 ## Licenses

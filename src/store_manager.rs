@@ -15,9 +15,21 @@ impl StoreManager {
         config: crate::config::Config,
         i18n: &crate::i18n::I18n,
     ) -> Result<Self> {
-        let base_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".dt");
+        Self::new_with_config_and_base_dir(config, i18n, None)
+    }
+
+    pub fn new_with_config_and_base_dir(
+        config: crate::config::Config,
+        i18n: &crate::i18n::I18n,
+        base_override: Option<PathBuf>,
+    ) -> Result<Self> {
+        let base_dir = if let Some(dir) = base_override {
+            dir
+        } else {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".dt")
+        };
 
         fs::create_dir_all(&base_dir).context(i18n.t("error_create_dt_dir"))?;
 

@@ -9,7 +9,7 @@ Set Theme "Dracula"
 Output "docs/gallery/dt-diff.gif"
 
 # Data is prepared by scripts/demo_prep.sh. Launch diff directly.
-Type "./package/latest/dt diff date"
+Type "./package/latest/dt --data-dir /tmp/dt_demo_data diff date"
 Enter
 Sleep 800ms
 

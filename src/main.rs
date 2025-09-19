@@ -26,6 +26,9 @@ use store_manager::StoreManager;
 #[command(name = "dt")]
 #[command(about = "")]
 struct Cli {
+    /// Override data directory (default: ~/.dt)
+    #[arg(long = "data-dir", global = true)]
+    data_dir: Option<PathBuf>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -131,7 +134,11 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = Config::new()?;
     let i18n = I18n::new(&config.get_effective_language());
-    let store = StoreManager::new_with_config(config.clone(), &i18n)?;
+    let store = StoreManager::new_with_config_and_base_dir(
+        config.clone(),
+        &i18n,
+        cli.data_dir.clone(),
+    )?;
 
     match cli.command {
         Commands::Run { command, diff_code } => {
@@ -692,7 +699,8 @@ fn print_help(i18n: &I18n) {
         println!("{}", i18n.t("help_subcommand_more"));
         println!();
         println!("{}", i18n.t("help_label_options"));
-        println!("  -h, --help  Print help");
+        println!("  -h, --help           Print help");
+        println!("      --data-dir <DIR> Override data directory (default: ~/.dt)");
         println!();
         println!("{}", i18n.t("help_config_section"));
         println!("  - {}", i18n.t("help_config_tui_mode"));
