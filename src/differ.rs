@@ -586,6 +586,7 @@ impl Differ {
         tui_simple: bool,
         use_alt_screen: bool,
         max_viewport: Option<usize>,
+        linewise: bool,
     ) -> Result<()> {
         // Build command groups from index
         let records = store.get_all_records()?;
@@ -625,6 +626,7 @@ impl Differ {
                     &executions,
                     i18n,
                     use_alt_screen,
+                    linewise,
                     || {
                         store_ref
                             .find_executions(&hash_clone, i18n)
@@ -640,7 +642,7 @@ impl Differ {
                 }
             }
 
-            if let Some(diff_output) = Self::diff_executions(&executions, i18n) {
+            if let Some(diff_output) = Self::diff_executions(&executions, i18n, linewise) {
                 print!("{}", diff_output);
             }
             return Ok(());
@@ -895,7 +897,11 @@ impl Differ {
             }
         }
     }
-    pub fn diff_executions(executions: &[CommandExecution], i18n: &I18n) -> Option<String> {
+    pub fn diff_executions(
+        executions: &[CommandExecution],
+        i18n: &I18n,
+        linewise: bool,
+    ) -> Option<String> {
         if executions.len() < 2 {
             return None;
         }
@@ -970,13 +976,21 @@ impl Differ {
 
         if earlier.stdout != later.stdout {
             output.push_str(&format!("{}\n", i18n.t("stdout_diff").yellow().bold()));
-            output.push_str(&Self::diff_text(&earlier.stdout, &later.stdout));
+            if linewise {
+                output.push_str(&Self::diff_text_linewise(&earlier.stdout, &later.stdout));
+            } else {
+                output.push_str(&Self::diff_text(&earlier.stdout, &later.stdout));
+            }
             output.push('\n');
         }
 
         if earlier.stderr != later.stderr {
             output.push_str(&format!("{}\n", i18n.t("stderr_diff").red().bold()));
-            output.push_str(&Self::diff_text(&earlier.stderr, &later.stderr));
+            if linewise {
+                output.push_str(&Self::diff_text_linewise(&earlier.stderr, &later.stderr));
+            } else {
+                output.push_str(&Self::diff_text(&earlier.stderr, &later.stderr));
+            }
             output.push('\n');
         }
 
@@ -1151,126 +1165,253 @@ impl Differ {
         layout: &PreviewLayout,
         i18n: &I18n,
         preview_target: PreviewTarget,
-        exec: Option<&CommandExecution>,
+        focus_exec: Option<&CommandExecution>,
+        diff_pair: Option<(&CommandExecution, &CommandExecution)>,
+        linewise: bool,
     ) -> io::Result<()> {
         let max_rows = layout.total_rows.saturating_sub(1);
         if max_rows == 0 {
             return Ok(());
         }
-        let header_text = i18n.t(preview_target.label_key());
-        let reserved_header_rows = 2usize;
+        let max_rows = max_rows as usize;
 
-        let (_path_line, body_lines) = match exec {
-            Some(execution) => {
-                let raw_path = if preview_target.is_stdout() {
-                    execution.stdout_path.as_ref()
-                } else {
-                    execution.stderr_path.as_ref()
-                };
-                let path_text = raw_path
-                    .map(|p| i18n.t_format("preview_path_label", &[&p.display().to_string()]))
-                    .unwrap_or_else(|| i18n.t("preview_path_missing"));
-                let path_line = None; // Path is rendered in the preview header area; avoid double rendering
+        let toggle_hint = i18n.t("preview_toggle_short");
+        let header_text = if diff_pair.is_some() {
+            match preview_target {
+                PreviewTarget::Stdout => i18n.t("preview_diff_stdout_header"),
+                PreviewTarget::Stderr => i18n.t("preview_diff_stderr_header"),
+            }
+        } else {
+            i18n.t(preview_target.label_key())
+        };
+        let header_display = Self::truncate_for_column(
+            &format!("{}  ·  {}", header_text, toggle_hint),
+            layout.preview_width,
+        );
 
-                // Reserve body lines according to wrapped path rows; always keep at least 1 body line
-                let path_rows = Self::wrap_line_to_width(&path_text, layout.preview_width).len();
-                let available_body_lines = max_rows
-                    .saturating_sub((reserved_header_rows + path_rows) as u16)
-                    .max(1) as usize;
+        enum PreviewBody {
+            Text(String),
+            Lines(Vec<String>),
+        }
 
-                let content = if preview_target.is_stdout() {
-                    execution.stdout.as_str()
-                } else {
-                    execution.stderr.as_str()
-                };
-                let lines = if content.is_empty() {
+        let (metadata_lines, body) = if let Some((earlier, later)) = diff_pair {
+            let earlier_local = earlier.record.timestamp.with_timezone(&chrono::Local);
+            let later_local = later.record.timestamp.with_timezone(&chrono::Local);
+            let short_code_label = i18n.t("short_code_label");
+            let earlier_code = earlier
+                .record
+                .short_code
+                .clone()
+                .unwrap_or_else(|| "—".to_string());
+            let later_code = later
+                .record
+                .short_code
+                .clone()
+                .unwrap_or_else(|| "—".to_string());
+            let earlier_label = i18n.t("diff_earlier_label");
+            let later_label = i18n.t("diff_later_label");
+            let label_width = earlier_label
+                .chars()
+                .count()
+                .max(later_label.chars().count());
+            let earlier_line = format!(
+                "- {:width$}: {} [{}: {}]",
+                earlier_label,
+                earlier_local.format("%Y-%m-%d %H:%M:%S"),
+                short_code_label,
+                earlier_code,
+                width = label_width
+            );
+            let later_line = format!(
+                "+ {:width$}: {} [{}: {}]",
+                later_label,
+                later_local.format("%Y-%m-%d %H:%M:%S"),
+                short_code_label,
+                later_code,
+                width = label_width
+            );
+            let exec_time_line = i18n.t_format(
+                "diff_execution_time",
+                &[
+                    &earlier.record.duration_ms.to_string(),
+                    &later.record.duration_ms.to_string(),
+                ],
+            );
+            let (old_text, new_text) = if preview_target.is_stdout() {
+                (earlier.stdout.as_str(), later.stdout.as_str())
+            } else {
+                (earlier.stderr.as_str(), later.stderr.as_str())
+            };
+            let body_text = if old_text == new_text {
+                i18n.t("output_identical")
+            } else if linewise {
+                Self::diff_preview_text_linewise(old_text, new_text)
+            } else {
+                Self::diff_preview_text(old_text, new_text)
+            };
+            (
+                vec![earlier_line, later_line, exec_time_line],
+                PreviewBody::Text(body_text),
+            )
+        } else if let Some(execution) = focus_exec {
+            let raw_path = if preview_target.is_stdout() {
+                execution.stdout_path.as_ref()
+            } else {
+                execution.stderr_path.as_ref()
+            };
+            let path_text = raw_path
+                .map(|p| i18n.t_format("preview_path_label", &[&p.display().to_string()]))
+                .unwrap_or_else(|| i18n.t("preview_path_missing"));
+            let content = if preview_target.is_stdout() {
+                execution.stdout.as_str()
+            } else {
+                execution.stderr.as_str()
+            };
+            let body = if content.is_empty() {
+                PreviewBody::Lines(vec![i18n.t("preview_empty")])
+            } else {
+                PreviewBody::Text(content.to_string())
+            };
+            (vec![path_text], body)
+        } else {
+            (
+                vec![i18n.t("preview_path_missing")],
+                PreviewBody::Lines(vec![i18n.t("preview_no_selection")]),
+            )
+        };
+
+        let mut metadata_wrapped: Vec<String> = Vec::new();
+        for line in metadata_lines {
+            metadata_wrapped.extend(Self::wrap_line_to_width(&line, layout.preview_width));
+        }
+
+        let header_rows = 1usize;
+        let available_body_lines = max_rows
+            .saturating_sub(header_rows + metadata_wrapped.len())
+            .max(1);
+
+        let body_lines = match body {
+            PreviewBody::Lines(lines) => lines,
+            PreviewBody::Text(text) => {
+                if text.is_empty() {
                     vec![i18n.t("preview_empty")]
                 } else {
-                    let (wrapped_body, was_truncated) = Self::wrap_preview_content(
-                        content,
+                    let (mut wrapped, was_truncated) = Self::wrap_preview_content(
+                        &text,
                         layout.preview_width,
                         available_body_lines,
                     );
-                    let mut collected = if wrapped_body.is_empty() {
-                        vec![i18n.t("preview_empty")]
-                    } else {
-                        wrapped_body
-                    };
-                    if was_truncated {
-                        collected.push(i18n.t("preview_truncated_hint"));
+                    if wrapped.is_empty() {
+                        wrapped.push(i18n.t("preview_empty"));
                     }
-                    collected
-                };
-
-                (path_line, lines)
+                    if was_truncated {
+                        wrapped.push(i18n.t("preview_truncated_hint"));
+                    }
+                    wrapped
+                }
             }
-            None => (
-                Some(Self::truncate_for_column(
-                    &i18n.t("preview_path_missing"),
-                    layout.preview_width,
-                )),
-                vec![i18n.t("preview_no_selection")],
-            ),
         };
 
-        // Place preview at the very top row of the preview column
-        // (we moved prompts to the bottom status bar)
-        let mut row = 0u16;
         // Draw vertical separator between panels
         let sep_col = layout.start_col.saturating_sub(1);
         for r in 0..max_rows {
-            stdout.queue(MoveTo(sep_col, r))?;
+            stdout.queue(MoveTo(sep_col, r as u16))?;
             stdout.queue(Print("│".to_string()))?;
         }
 
-        // Header area: row 0 shows (truncated) Path; row 1 shows preview header
-        let path_wrapped: Vec<String> = match exec {
-            Some(execution) => {
-                let raw_path = if preview_target.is_stdout() {
-                    execution.stdout_path.as_ref()
-                } else {
-                    execution.stderr_path.as_ref()
-                };
-                let label = raw_path
-                    .map(|p| i18n.t_format("preview_path_label", &[&p.display().to_string()]))
-                    .unwrap_or_else(|| i18n.t("preview_path_missing"));
-                Self::wrap_line_to_width(&label, layout.preview_width)
-            }
-            None => {
-                let label = i18n.t("preview_path_missing");
-                Self::wrap_line_to_width(&label, layout.preview_width)
-            }
-        };
-        // Line 1: Path (single line, truncated)
-        let first_path = path_wrapped.first().cloned().unwrap_or_default();
-        let path_display = Self::truncate_for_column(&first_path, layout.preview_width);
-        stdout.queue(MoveTo(layout.start_col, row))?;
-        stdout.queue(Print(path_display))?;
-        row = row.saturating_add(1);
-        // Line 2: Preview header with a concise toggle hint so users discover left/right switch
-        let header_with_hint = format!("{}  ·  {}", header_text, i18n.t("preview_toggle_short"));
-        let header_display = Self::truncate_for_column(&header_with_hint, layout.preview_width);
-        stdout.queue(MoveTo(layout.start_col, row))?;
+        let mut row = 0usize;
+        stdout.queue(MoveTo(layout.start_col, row as u16))?;
         stdout.queue(Print(header_display))?;
-        row = row.saturating_add(1);
+        row += 1;
+
+        for line in metadata_wrapped {
+            if row >= max_rows {
+                break;
+            }
+            let display_line = Self::truncate_for_column(&line, layout.preview_width);
+            stdout.queue(MoveTo(layout.start_col, row as u16))?;
+            stdout.queue(Print(display_line))?;
+            row += 1;
+        }
 
         for line in body_lines {
             if row >= max_rows {
                 break;
             }
             let display_line = Self::truncate_for_column(&line, layout.preview_width);
-            stdout.queue(MoveTo(layout.start_col, row))?;
+            stdout.queue(MoveTo(layout.start_col, row as u16))?;
             stdout.queue(Print(format!("{}[K", display_line)))?;
-            row = row.saturating_add(1);
+            row += 1;
         }
 
         while row < max_rows {
-            stdout.queue(MoveTo(layout.start_col, row))?;
+            stdout.queue(MoveTo(layout.start_col, row as u16))?;
             stdout.queue(Print("[K".to_string()))?;
-            row = row.saturating_add(1);
+            row += 1;
         }
 
         Ok(())
+    }
+
+    fn diff_preview_text(old: &str, new: &str) -> String {
+        let diff = TextDiff::from_lines(old, new);
+        let mut result = String::new();
+
+        for change in diff.iter_all_changes() {
+            let prefix = match change.tag() {
+                ChangeTag::Delete => '-',
+                ChangeTag::Insert => '+',
+                ChangeTag::Equal => ' ',
+            };
+            result.push(prefix);
+            result.push(' ');
+            result.push_str(change.value());
+        }
+
+        result
+    }
+
+    fn diff_preview_text_linewise(old: &str, new: &str) -> String {
+        let mut result = String::new();
+        let old_lines: Vec<&str> = old.split('\n').collect();
+        let new_lines: Vec<&str> = new.split('\n').collect();
+        let max_len = old_lines.len().max(new_lines.len());
+        for i in 0..max_len {
+            let o = old_lines.get(i).copied();
+            let n = new_lines.get(i).copied();
+            match (o, n) {
+                (Some(ol), Some(nl)) if ol == nl => {
+                    result.push(' ');
+                    result.push(' ');
+                    result.push_str(ol);
+                    result.push('\n');
+                }
+                (Some(ol), Some(nl)) => {
+                    result.push('-');
+                    result.push(' ');
+                    result.push_str(ol);
+                    result.push('\n');
+                    result.push('+');
+                    result.push(' ');
+                    result.push_str(nl);
+                    result.push('\n');
+                }
+                (Some(ol), None) => {
+                    result.push('-');
+                    result.push(' ');
+                    result.push_str(ol);
+                    result.push('\n');
+                }
+                (None, Some(nl)) => {
+                    result.push('+');
+                    result.push(' ');
+                    result.push_str(nl);
+                    result.push('\n');
+                }
+                (None, None) => {}
+            }
+        }
+        result
     }
 
     fn diff_text(old: &str, new: &str) -> String {
@@ -1295,109 +1436,44 @@ impl Differ {
         result
     }
 
-    #[allow(dead_code)]
-    pub fn select_executions_for_diff(
-        executions: &[CommandExecution],
-        i18n: &I18n,
-    ) -> Vec<CommandExecution> {
-        if executions.len() <= 2 {
-            return executions.to_vec();
-        }
-
-        println!(
-            "{}",
-            i18n.t_format("select_executions", &[&executions.len().to_string()])
-        );
-
-        // Render records (compact: short code and time only)
-        for (i, exec) in executions.iter().enumerate() {
-            let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
-            let date_str = local_time.format("%Y-%m-%d %H:%M:%S");
-            if let Some(code) = &exec.record.short_code {
-                println!(
-                    "{}: {}:{} {}: {}",
-                    i + 1,
-                    i18n.t("short_code_label"),
-                    code,
-                    i18n.t("time_label"),
-                    date_str,
-                );
-            } else {
-                println!("{}: {}: {}", i + 1, i18n.t("time_label"), date_str,);
+    fn diff_text_linewise(old: &str, new: &str) -> String {
+        let mut result = String::new();
+        let old_lines: Vec<&str> = old.split('\n').collect();
+        let new_lines: Vec<&str> = new.split('\n').collect();
+        let max_len = old_lines.len().max(new_lines.len());
+        for i in 0..max_len {
+            let o = old_lines.get(i).copied();
+            let n = new_lines.get(i).copied();
+            match (o, n) {
+                (Some(ol), Some(nl)) if ol == nl => {
+                    result.push_str(&format!(" {}\n", ol));
+                }
+                (Some(ol), Some(nl)) => {
+                    result.push_str(&format!("{}{}\n", "-".red(), ol.red()));
+                    result.push_str(&format!("{}{}\n", "+".green(), nl.green()));
+                }
+                (Some(ol), None) => {
+                    result.push_str(&format!("{}{}\n", "-".red(), ol.red()));
+                }
+                (None, Some(nl)) => {
+                    result.push_str(&format!("{}{}\n", "+".green(), nl.green()));
+                }
+                (None, None) => {}
             }
         }
-
-        println!("{}", i18n.t("input_numbers"));
-
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).unwrap();
-
-        // Check if it's date filter mode (supports fuzzy matching)
-        let input = input.trim();
-        if Self::is_date_filter_input(input, i18n) {
-            return Self::filter_by_date(executions, input, i18n);
-        }
-
-        // Number selection mode
-        let parts: Vec<&str> = input.split_whitespace().collect();
-        if parts.len() != 2 {
-            println!("{}", i18n.t("invalid_input"));
-            return executions.iter().take(2).cloned().collect();
-        }
-
-        let indices: Vec<usize> = parts
-            .iter()
-            .filter_map(|s| s.parse::<usize>().ok())
-            .filter(|&i| i > 0 && i <= executions.len())
-            .collect();
-
-        if indices.len() != 2 {
-            println!("{}", i18n.t("invalid_input"));
-            return executions.iter().take(2).cloned().collect();
-        }
-
-        let mut selected = Vec::new();
-        for &i in &indices {
-            selected.push(executions[i - 1].clone());
-        }
-
-        selected.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
-        selected
+        result
     }
 
-    #[allow(dead_code)]
-    pub fn interactive_select_executions(
-        executions: &[CommandExecution],
-        i18n: &I18n,
-        tui_simple: bool,
-        use_alt_screen: bool,
-    ) -> Vec<CommandExecution> {
-        if executions.len() <= 2 {
-            return executions.to_vec();
-        }
+    
 
-        if tui_simple {
-            return Self::simple_select_executions(executions, i18n);
-        }
-
-        // Start interactive selection interface
-        Self::start_interactive_selection_impl(
-            executions,
-            i18n,
-            use_alt_screen,
-            || executions.to_vec(),
-            false,
-            None,
-            None::<fn(&CommandExecution) -> Result<()>>,
-        )
-    }
-
+    #[allow(clippy::too_many_arguments)]
     pub fn interactive_select_executions_with_loader<F, D>(
         executions: &[CommandExecution],
         i18n: &I18n,
         tui_simple: bool,
         use_alt_screen: bool,
         max_viewport: Option<usize>,
+        linewise: bool,
         loader: F,
         delete_action: Option<D>,
     ) -> Vec<CommandExecution>
@@ -1412,6 +1488,7 @@ impl Differ {
             executions,
             i18n,
             use_alt_screen,
+            linewise,
             loader,
             false,
             max_viewport,
@@ -1419,10 +1496,12 @@ impl Differ {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn start_interactive_selection_impl<F, D>(
         executions: &[CommandExecution],
         i18n: &I18n,
         use_alt_screen: bool,
+        linewise: bool,
         mut loader: F,
         on_escape_return_empty: bool,
         max_viewport: Option<usize>,
@@ -1644,8 +1723,9 @@ impl Differ {
                     let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
                     let date_str = local_time.format("%Y-%m-%d %H:%M:%S");
 
-                    // Fixed-width left padding (no icon)
-                    let prefix = "  ";
+                    // Fixed-width left padding; show checkmark for already selected entries
+                    let is_selected = selected_ids.iter().any(|id| id == &exec.record.record_id);
+                    let prefix = if is_selected { "✓ " } else { "  " };
                     let code = exec.record.short_code.as_deref();
                     let raw_line = if let Some(code) = code {
                         format!(
@@ -1675,6 +1755,8 @@ impl Differ {
                     // Current highlight line: put reset code in same line to avoid polluting next line
                     if list_idx == current_selection {
                         print!("\x1b[44;37m{}\x1b[0m\x1b[K\r\n", line);
+                    } else if is_selected {
+                        print!("\x1b[42;30m{}\x1b[0m\x1b[K\r\n", line);
                     } else {
                         print!("{}\x1b[K\r\n", line);
                     }
@@ -1707,12 +1789,32 @@ impl Differ {
                 let preview_exec = filtered_indices
                     .get(current_selection)
                     .map(|&idx| display_executions[idx]);
+                let selected_pair = if selected_ids.len() == 2 {
+                    let mut pair: Vec<&CommandExecution> = selected_ids
+                        .iter()
+                        .filter_map(|id| {
+                            current_execs
+                                .iter()
+                                .find(|exec| &exec.record.record_id == id)
+                        })
+                        .collect();
+                    if pair.len() == 2 {
+                        pair.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
+                        Some((pair[0], pair[1]))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 let _ = Self::draw_preview_panel(
                     &mut stdout,
                     layout,
                     i18n,
                     preview_target,
                     preview_exec,
+                    selected_pair,
+                    linewise,
                 );
             }
 
@@ -1720,10 +1822,10 @@ impl Differ {
             stdout.flush().unwrap();
 
             // Read keyboard input
-            let mut clear_pending_delete = || {
+            let mut clear_pending_delete = |last_action: &mut Option<String>| {
                 if pending_delete.is_some() {
                     pending_delete = None;
-                    last_action_message = None;
+                    *last_action = None;
                 }
             };
 
@@ -1740,8 +1842,17 @@ impl Differ {
                             .position(|id| id == &ex.record.record_id)
                         {
                             selected_ids.remove(pos);
+                            last_action_message = None;
+                        } else if selected_ids.len() >= 2 {
+                            last_action_message = Some(i18n.t("selection_limit_reached"));
+                            return;
                         } else {
                             selected_ids.push(ex.record.record_id.clone());
+                            if selected_ids.len() == 2 {
+                                last_action_message = Some(i18n.t("selection_complete"));
+                            } else {
+                                last_action_message = None;
+                            }
                         }
                         if step_down {
                             let max_idx = filtered_indices.len().saturating_sub(1);
@@ -1785,12 +1896,12 @@ impl Differ {
                     match key_event.code {
                         // Navigation keys
                         KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                            clear_pending_delete();
+                            clear_pending_delete(&mut last_action_message);
                             // Move selection up
                             current_selection = current_selection.saturating_sub(1);
                         }
                         KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                            clear_pending_delete();
+                            clear_pending_delete(&mut last_action_message);
                             // Move selection down
                             if !filtered_indices.is_empty()
                                 && current_selection < filtered_indices.len() - 1
@@ -1800,11 +1911,11 @@ impl Differ {
                         }
                         // Ctrl-p / Ctrl-n
                         KeyCode::Char('p') if is_ctrl_combo => {
-                            clear_pending_delete();
+                            clear_pending_delete(&mut last_action_message);
                             current_selection = current_selection.saturating_sub(1);
                         }
                         KeyCode::Char('n') if is_ctrl_combo => {
-                            clear_pending_delete();
+                            clear_pending_delete(&mut last_action_message);
                             if !filtered_indices.is_empty()
                                 && current_selection < filtered_indices.len() - 1
                             {
@@ -1813,7 +1924,7 @@ impl Differ {
                         }
                         // PageDown / Ctrl-f, PageUp / Ctrl-b
                         KeyCode::PageDown | KeyCode::Char('f') if is_ctrl_combo => {
-                            clear_pending_delete();
+                            clear_pending_delete(&mut last_action_message);
                             if !filtered_indices.is_empty() {
                                 let viewport = if let Some(mv) = max_viewport {
                                     mv.max(3)
@@ -1831,7 +1942,7 @@ impl Differ {
                             }
                         }
                         KeyCode::PageUp | KeyCode::Char('b') if is_ctrl_combo => {
-                            clear_pending_delete();
+                            clear_pending_delete(&mut last_action_message);
                             if !filtered_indices.is_empty() {
                                 let viewport = if let Some(mv) = max_viewport {
                                     mv.max(3)
@@ -1858,42 +1969,49 @@ impl Differ {
                         }
                         // Control keys
                         KeyCode::Enter => {
-                            // If already marked two, confirm and exit; otherwise mark current and exit if two.
-                            if !filtered_indices.is_empty() {
-                                if selected_ids.len() >= 2 {
-                                    // finalize immediately
-                                } else {
-                                    let oi = filtered_indices[current_selection];
-                                    let ex = &display_executions[oi];
-                                    if !selected_ids.iter().any(|id| id == &ex.record.record_id) {
-                                        selected_ids.push(ex.record.record_id.clone());
+                            // Simple behavior: if two items are selected, execute immediately
+                            if selected_ids.len() == 2 {
+                                // Exit TUI and return the two selected records regardless of cursor position
+                                print!("\x1b[2J\x1b[H");
+                                stdout.flush().unwrap();
+                                if use_alt_screen {
+                                    print!("\x1b[?1049l");
+                                }
+                                print!("\x1b[?7h\x1b[?25h");
+                                stdout.flush().ok();
+                                terminal::disable_raw_mode().unwrap();
+
+                                let mut result = Vec::new();
+                                for sid in &selected_ids {
+                                    if let Some(exec) =
+                                        current_execs.iter().find(|e| &e.record.record_id == sid)
+                                    {
+                                        result.push(exec.clone());
                                     }
                                 }
+                                result.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
+                                return result;
+                            }
 
-                                if selected_ids.len() >= 2 {
-                                    print!("\x1b[2J\x1b[H");
-                                    print!("\x1b[32m{}\x1b[0m\r\n", i18n.t("selection_complete"));
-                                    stdout.flush().unwrap();
-                                    if use_alt_screen {
-                                        print!("\x1b[?1049l");
-                                    }
-                                    print!("\x1b[?7h\x1b[?25h");
-                                    stdout.flush().ok();
-                                    terminal::disable_raw_mode().unwrap();
+                            // Otherwise, treat Enter as a toggle/select on the current line
+                            if filtered_indices.is_empty() {
+                                continue;
+                            }
+                            let oi = filtered_indices[current_selection];
+                            let ex = &display_executions[oi];
+                            let record_id = &ex.record.record_id;
 
-                                    let mut result = Vec::new();
-                                    for sid in &selected_ids {
-                                        if let Some(exec) = current_execs
-                                            .iter()
-                                            .find(|e| &e.record.record_id == sid)
-                                        {
-                                            result.push(exec.clone());
-                                        }
-                                    }
-                                    result.sort_by(|a, b| {
-                                        a.record.timestamp.cmp(&b.record.timestamp)
-                                    });
-                                    return result;
+                            if selected_ids.iter().any(|id| id == record_id) {
+                                // Already selected and not yet two items selected: no-op
+                            } else if selected_ids.len() >= 2 {
+                                // Should not happen due to early return, but keep message for safety
+                                last_action_message = Some(i18n.t("selection_limit_reached"));
+                            } else {
+                                selected_ids.push(record_id.clone());
+                                if selected_ids.len() == 2 {
+                                    last_action_message = Some(i18n.t("selection_complete"));
+                                } else {
+                                    last_action_message = None;
                                 }
                             }
                         }
@@ -1947,14 +2065,14 @@ impl Differ {
                         }
                         _ if Self::is_shift_backspace_event(&key_event) => {
                             if delete_action.is_none() {
-                                clear_pending_delete();
+                                clear_pending_delete(&mut last_action_message);
                                 filter_input.pop();
                                 current_selection = 0;
                                 scroll_offset = 0;
                                 current_execs = loader();
                                 display_executions = current_execs.iter().collect();
                             } else if filtered_indices.is_empty() {
-                                clear_pending_delete();
+                                clear_pending_delete(&mut last_action_message);
                                 last_action_message = Some(i18n.t("delete_nothing"));
                             } else {
                                 let oi = filtered_indices[current_selection];
@@ -2012,10 +2130,10 @@ impl Differ {
                         // Ctrl+X behaves like Shift+Backspace (delete current record with confirm)
                         KeyCode::Char('x') if is_ctrl_combo => {
                             if delete_action.is_none() {
-                                clear_pending_delete();
+                                clear_pending_delete(&mut last_action_message);
                                 // When deletion is not available in this screen, treat as no-op
                             } else if filtered_indices.is_empty() {
-                                clear_pending_delete();
+                                clear_pending_delete(&mut last_action_message);
                                 last_action_message = Some(i18n.t("delete_nothing"));
                             } else {
                                 let oi = filtered_indices[current_selection];
@@ -2062,15 +2180,16 @@ impl Differ {
                                     }
                                 } else {
                                     pending_delete = Some(target_exec);
-                                    last_action_message = Some(i18n.t_format(
-                                        "delete_confirm_status",
-                                        &[&timestamp_display],
-                                    ));
+                                    last_action_message =
+                                        Some(i18n.t_format(
+                                            "delete_confirm_status",
+                                            &[&timestamp_display],
+                                        ));
                                 }
                             }
                         }
                         _ if Self::is_backspace_event(&key_event) => {
-                            clear_pending_delete();
+                            clear_pending_delete(&mut last_action_message);
                             filter_input.pop();
                             current_selection = 0;
                             scroll_offset = 0;
@@ -2410,6 +2529,106 @@ impl Differ {
             11 => "nov",
             12 => "dec",
             _ => "unknown",
+        }
+    }
+}
+
+#[cfg(test)]
+mod test_support {
+    use super::*;
+
+    impl Differ {
+        pub fn select_executions_for_diff(
+            executions: &[CommandExecution],
+            i18n: &I18n,
+        ) -> Vec<CommandExecution> {
+            if executions.len() <= 2 {
+                return executions.to_vec();
+            }
+
+            println!(
+                "{}",
+                i18n.t_format("select_executions", &[&executions.len().to_string()])
+            );
+
+            for (i, exec) in executions.iter().enumerate() {
+                let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
+                let date_str = local_time.format("%Y-%m-%d %H:%M:%S");
+                if let Some(code) = &exec.record.short_code {
+                    println!(
+                        "{}: {}:{} {}: {}",
+                        i + 1,
+                        i18n.t("short_code_label"),
+                        code,
+                        i18n.t("time_label"),
+                        date_str,
+                    );
+                } else {
+                    println!("{}: {}: {}", i + 1, i18n.t("time_label"), date_str,);
+                }
+            }
+
+            println!("{}", i18n.t("input_numbers"));
+
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).unwrap();
+
+            let input = input.trim();
+            if Self::is_date_filter_input(input, i18n) {
+                return Self::filter_by_date(executions, input, i18n);
+            }
+
+            let parts: Vec<&str> = input.split_whitespace().collect();
+            if parts.len() != 2 {
+                println!("{}", i18n.t("invalid_input"));
+                return executions.iter().take(2).cloned().collect();
+            }
+
+            let indices: Vec<usize> = parts
+                .iter()
+                .filter_map(|s| s.parse::<usize>().ok())
+                .filter(|&i| i > 0 && i <= executions.len())
+                .collect();
+
+            if indices.len() != 2 {
+                println!("{}", i18n.t("invalid_input"));
+                return executions.iter().take(2).cloned().collect();
+            }
+
+            let mut selected = Vec::new();
+            for &i in &indices {
+                selected.push(executions[i - 1].clone());
+            }
+
+            selected.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
+            selected
+        }
+
+        pub fn interactive_select_executions(
+            executions: &[CommandExecution],
+            i18n: &I18n,
+            tui_simple: bool,
+            use_alt_screen: bool,
+            linewise: bool,
+        ) -> Vec<CommandExecution> {
+            if executions.len() <= 2 {
+                return executions.to_vec();
+            }
+
+            if tui_simple {
+                return Self::simple_select_executions(executions, i18n);
+            }
+
+            Self::start_interactive_selection_impl(
+                executions,
+                i18n,
+                use_alt_screen,
+                linewise,
+                || executions.to_vec(),
+                false,
+                None,
+                None::<fn(&CommandExecution) -> Result<()>>,
+            )
         }
     }
 }

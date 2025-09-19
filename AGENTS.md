@@ -4,7 +4,7 @@
 - `src/` Rust 2021 source: `main.rs` (CLI entry via clap), `executor.rs` (runs commands), `differ.rs` (diff + TUI), `store_manager.rs` and `storage.rs` (persistence under `~/.dt`), `config.rs` (TOML config), `i18n.rs` (EN/ZH strings), `fuzzy_matcher.rs` (Skim-like matching, no external fzf dependency).
 - `package/` packaging artifacts and release notes; `package.sh` builds a distributable and usage docs.
 - `target/` Cargo build output. Runtime data is written to `~/.dt/`.
-- Root helpers: `test_package.sh`, `test_interactive.rs`, `test_hash.rs` (ad‑hoc utilities).
+- Root helper: `test_package.sh` (packaging quick verification).
 
 ## Build, Test, and Development
 - Build debug/release:

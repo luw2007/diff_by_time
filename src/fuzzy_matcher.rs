@@ -4,7 +4,7 @@ use fuzzy_matcher::FuzzyMatcher;
 #[derive(Debug, Clone)]
 pub struct MatchResult {
     pub score: i64,
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub indices: Vec<usize>,
 }
 
@@ -126,8 +126,8 @@ impl SkimMatcher {
         results
     }
 
-    /// Highlight matched text
-    #[allow(dead_code)]
+    /// Highlight matched text (used in tests)
+    #[cfg(test)]
     pub fn highlight_matches(&self, text: &str, indices: &[usize]) -> String {
         if indices.is_empty() {
             return text.to_string();

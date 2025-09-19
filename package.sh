@@ -31,6 +31,26 @@ cp "README.md" "package/${PACKAGE_NAME}/" 2>/dev/null || echo "⚠️  README.md
 cp "LICENSE" "package/${PACKAGE_NAME}/" 2>/dev/null || echo "⚠️  LICENSE missing"
 cp "THIRD_PARTY_NOTICES.md" "package/${PACKAGE_NAME}/" 2>/dev/null || echo "⚠️  THIRD_PARTY_NOTICES.md missing"
 
+# Generate third-party dependency report (prefers cargo-about, falls back to cargo-license)
+echo "📄 Generating third-party dependency report..."
+REPORT_OUT_MD="package/${PACKAGE_NAME}/THIRD_PARTY_DEPENDENCIES.md"
+REPORT_OUT_JSON="package/${PACKAGE_NAME}/THIRD_PARTY_DEPENDENCIES.json"
+if command -v cargo-about >/dev/null 2>&1; then
+  TEMPLATE="package/about_template.hbs"
+  CONFIG="package/about.hjson"
+  if [[ -f "$TEMPLATE" && -f "$CONFIG" ]]; then
+    cargo about generate "$CONFIG" "$TEMPLATE" --workspace -o "$REPORT_OUT_MD" >/dev/null || {
+      echo "⚠️  cargo-about generation failed; continuing";
+    }
+  else
+    echo "⚠️  Missing cargo-about template or config (package/about_template.hbs, package/about.hjson)"
+  fi
+elif command -v cargo-license >/dev/null 2>&1; then
+  cargo license --json > "$REPORT_OUT_JSON" || echo "⚠️  cargo-license failed; continuing"
+else
+  echo "⚠️  Neither cargo-about nor cargo-license found; skipping generation"
+fi
+
 # Maintain a stable symlink to the latest package for demos/recordings
 ln -sfn "${PACKAGE_NAME}" "package/latest"
 
@@ -70,6 +90,9 @@ dt run -d ab "ls | head -5"
 ```bash
 # Compare different executions of the same command
 dt diff "ls | head -5"
+
+# Force strict line-by-line comparison (no cross-line alignment)
+dt diff --linewise "ls | head -5"
 ```
 
 #### Interactive Diff UI (keys)
@@ -130,7 +153,7 @@ dt --data-dir /tmp/dt_demo_data diff "date"
 
 ## Licenses
 
-This software includes third-party components (e.g., fuzzy-matcher with Skim-style algorithm). See `THIRD_PARTY_NOTICES.md` in the package for license details.
+This software includes third-party components (e.g., fuzzy-matcher with Skim-style algorithm). See `THIRD_PARTY_NOTICES.md` and the generated `THIRD_PARTY_DEPENDENCIES.md` (or `.json`) for dependency license details.
 
 ## Features
 
@@ -200,6 +223,7 @@ echo "📂 Package includes:"
 echo "  - ${BINARY_NAME} binary"
 echo "  - USAGE.md"
 echo "  - THIRD_PARTY_NOTICES.md"
+echo "  - THIRD_PARTY_DEPENDENCIES.md (or .json if cargo-about unavailable)"
 echo "  - install.sh"
 echo "  - README.md (if present)"
 echo "  - LICENSE (if present)"

@@ -1,0 +1,57 @@
+name: Build & Package
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Tests
+        run: cargo test --all --all-features --verbose
+
+      - name: Install packaging tools
+        run: |
+          cargo install cargo-about --locked || true
+          cargo install cargo-license --locked || true
+
+      - name: Make packaging script executable
+        run: chmod +x package.sh
+
+      - name: Package
+        run: ./package.sh
+
+      - name: Quick verify packaged binary
+        run: |
+          chmod +x test_package.sh || true
+          ./test_package.sh || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dt-packages
+          path: |
+            package/*.tar.gz
+            package/*.zip
+            package/dt-*/THIRD_PARTY_DEPENDENCIES.*
+            package/dt-*/THIRD_PARTY_NOTICES.md
+            package/dt-*/USAGE.md

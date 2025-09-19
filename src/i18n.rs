@@ -41,6 +41,10 @@ impl I18n {
             "Selector viewport height (rows)".to_string(),
         );
         en.insert(
+            "help_diff_linewise".to_string(),
+            "Compare strictly line-by-line (no cross-line alignment)".to_string(),
+        );
+        en.insert(
             "help_pipeline_tip".to_string(),
             "When your command contains pipes, redirects, or shell operators, wrap the whole expression in quotes. Example: dt run 'ls -l | wc'."
                 .to_string(),
@@ -219,7 +223,7 @@ impl I18n {
         en.insert("status_filter".to_string(), "Filter".to_string());
         en.insert(
             "status_nav_compact".to_string(),
-            "j/k ↑/↓ Enter Shift+Backspace/Ctrl+X Del Esc".to_string(),
+            "j/k ↑/↓ Enter Space/Tab Shift+Backspace/Ctrl+X Del Esc".to_string(),
         );
         en.insert(
             "delete_confirm_status".to_string(),
@@ -243,7 +247,11 @@ impl I18n {
         );
         en.insert(
             "selection_complete".to_string(),
-            "Selection complete, comparing records...".to_string(),
+            "Selected two records. Press Enter again to compare.".to_string(),
+        );
+        en.insert(
+            "selection_limit_reached".to_string(),
+            "Only two records can be compared at once. Deselect one to pick another.".to_string(),
         );
         en.insert("no_matches".to_string(), "No matches found".to_string());
         en.insert("navigate_hint".to_string(), "Navigation: j/k ↑/↓=move, Tab/Space=toggle, o/←/→=toggle output, Enter=select, Delete=clear, Esc=quit".to_string());
@@ -297,6 +305,14 @@ impl I18n {
         en.insert(
             "preview_stderr_header".to_string(),
             "Preview: stderr".to_string(),
+        );
+        en.insert(
+            "preview_diff_stdout_header".to_string(),
+            "Diff preview: stdout".to_string(),
+        );
+        en.insert(
+            "preview_diff_stderr_header".to_string(),
+            "Diff preview: stderr".to_string(),
         );
         en.insert(
             "preview_toggle_hint".to_string(),
@@ -445,6 +461,10 @@ impl I18n {
         zh.insert(
             "help_diff_max_shown".to_string(),
             "选择器视口高度（行数）".to_string(),
+        );
+        zh.insert(
+            "help_diff_linewise".to_string(),
+            "逐行比较（不进行跨行对齐）".to_string(),
         );
         zh.insert(
             "help_pipeline_tip".to_string(),
@@ -610,7 +630,7 @@ impl I18n {
         zh.insert("status_filter".to_string(), "筛选".to_string());
         zh.insert(
             "status_nav_compact".to_string(),
-            "j/k ↑/↓ Enter Shift+Backspace/Ctrl+X Del Esc".to_string(),
+            "j/k ↑/↓ Enter 空格/Tab Shift+Backspace/Ctrl+X Del Esc".to_string(),
         );
         zh.insert(
             "delete_confirm_status".to_string(),
@@ -634,7 +654,11 @@ impl I18n {
         );
         zh.insert(
             "selection_complete".to_string(),
-            "选择完成，正在比较记录...".to_string(),
+            "已选择两条记录，再次按 Enter 立即对比。".to_string(),
+        );
+        zh.insert(
+            "selection_limit_reached".to_string(),
+            "一次最多比较两条记录，请先取消其中一条再选择其它记录。".to_string(),
         );
         zh.insert("no_matches".to_string(), "没有找到匹配的记录".to_string());
         zh.insert("navigate_hint".to_string(), "导航: j/k ↑/↓=移动, Tab/Space=切换选中, o/←/→=切换输出, Enter=确认, Delete=清空, Esc=退出".to_string());
@@ -688,6 +712,14 @@ impl I18n {
         zh.insert(
             "preview_stderr_header".to_string(),
             "输出预览（stderr）".to_string(),
+        );
+        zh.insert(
+            "preview_diff_stdout_header".to_string(),
+            "差异预览（stdout）".to_string(),
+        );
+        zh.insert(
+            "preview_diff_stderr_header".to_string(),
+            "差异预览（stderr）".to_string(),
         );
         zh.insert(
             "preview_toggle_hint".to_string(),
