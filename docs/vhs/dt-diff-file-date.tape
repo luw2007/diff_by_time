@@ -2,8 +2,8 @@
 
 Set Shell "bash"
 Set FontSize 14
-Set Width 100
-Set Height 30
+Set Width 120
+Set Height 120
 Set Theme "Dracula"
 
 Output "docs/gallery/dt-diff-file-date.gif"
