@@ -27,6 +27,9 @@ cp "README.md" "package/${PACKAGE_NAME}/" 2>/dev/null || echo "⚠️  README.md
 cp "LICENSE" "package/${PACKAGE_NAME}/" 2>/dev/null || echo "⚠️  LICENSE missing"
 cp "THIRD_PARTY_NOTICES.md" "package/${PACKAGE_NAME}/" 2>/dev/null || echo "⚠️  THIRD_PARTY_NOTICES.md missing"
 
+# Maintain a stable symlink to the latest package for demos/recordings
+ln -sfn "${PACKAGE_NAME}" "package/latest"
+
 # Create English usage guide
 cat > "package/${PACKAGE_NAME}/USAGE.md" << 'EOF'
 # dt - Command Execution Time Diff Tool

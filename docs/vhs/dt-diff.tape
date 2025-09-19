@@ -8,17 +8,13 @@ Set Theme "Dracula"
 
 Output "docs/gallery/dt-diff.gif"
 
-# Use packaged release binary
-Type "cd package"
-Enter
-Type "cd $(ls -td dt-* | head -1)"
-Enter
+# Use packaged release binary via stable symlink
 
 # Seed demo data if necessary (optional, user may provide their own)
 # Type "./package/demo_seed.sh"; Enter
 
 # Launch interactive diff for a known simple command
-Type "./dt diff date"
+Type "./package/latest/dt diff date"
 Enter
 Sleep 800ms
 
