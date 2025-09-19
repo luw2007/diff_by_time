@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.4 — 2025-09-19
+- chore: bump version for follow-up release tag (no code changes)
+
 ## 0.1.1 — 2025-09-18
 - UI: dynamic left panel width based on visible items
 - UI: preview header split into two rows (Path on row 1; Preview on row 2)
