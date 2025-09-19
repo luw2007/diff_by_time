@@ -101,6 +101,17 @@ fn main() -> Result<()> {
     // First try to parse arguments to check if it's a help request
     let args: Vec<String> = std::env::args().collect();
 
+    if args.len() >= 2 {
+        match args[1].as_str() {
+            "--version" | "-v" | "-V" => {
+                println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
+
     // Check if help is requested
     let needs_help = args.contains(&"--help".to_string())
         || args.contains(&"-h".to_string())
@@ -706,6 +717,7 @@ fn print_help(i18n: &I18n) {
         println!();
         println!("{}", i18n.t("help_label_options"));
         println!("  -h, --help           Print help");
+        println!("  -v, -V, --version    Print version info");
         println!("      --data-dir <DIR> Override data directory (default: ~/.dt)");
         println!();
         println!("{}", i18n.t("help_config_section"));

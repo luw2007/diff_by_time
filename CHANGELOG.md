@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.5 — 2025-09-19
+- feat: add `--version`/`-v` flags to print package version for Homebrew tests and scripts
+
 ## 0.1.4 — 2025-09-19
 - chore: bump version for follow-up release tag (no code changes)
 
