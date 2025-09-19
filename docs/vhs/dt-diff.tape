@@ -2,8 +2,8 @@
 
 Set Shell "bash"
 Set FontSize 14
-Set Width 120
-Set Height 120
+Set Width 1280
+Set Height 800
 Set Theme "Dracula"
 
 Output "docs/gallery/dt-diff.gif"
@@ -22,7 +22,7 @@ Enter
 # Type "./package/demo_seed.sh"; Enter
 
 # Launch interactive diff for a known simple command
-Type "cargo run -- diff \"date\""
+Type "cargo run -- diff date"
 Enter
 Sleep 800ms
 

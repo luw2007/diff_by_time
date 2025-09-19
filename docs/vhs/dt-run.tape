@@ -2,8 +2,8 @@
 
 Set Shell "bash"
 Set FontSize 14
-Set Width 120
-Set Height 120
+Set Width 1280
+Set Height 800
 Set Theme "Dracula"
 
 Output "docs/gallery/dt-run.gif"
