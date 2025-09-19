@@ -8,25 +8,20 @@ Set Theme "Dracula"
 
 Output "docs/gallery/dt-diff.gif"
 
-# Data is prepared by scripts/demo_prep.sh. Launch diff directly.
-Type "./package/latest/dt --data-dir /tmp/dt_demo_data diff date"
+# Launch diff directly.
+Type "dt diff date"
 Enter
-Sleep 800ms
+Sleep 1000ms
 
 # Navigate and select two items
-Type "j"
-Sleep 200ms
-Type "Enter"
+Type "f"
 Sleep 300ms
-Type "j"
-Sleep 200ms
-Type "Enter"
+Enter
 Sleep 500ms
+Backspace
+Sleep 300ms
+Type "b"
+Sleep 500ms
+Enter
+Sleep 3000ms
 
-# Toggle preview target
-Type "o"
-Sleep 400ms
-
-# Quit the viewer
-Type "q"
-Sleep 200ms

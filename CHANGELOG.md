@@ -14,5 +14,10 @@
 - Keep keyboard navigation only; clarify preview toggle hint
 - Minor cleanups (comments, layout reserve lines)
 
-## 0.1.3 — 2025-09-18
-- Remove leftover i18n key for auto-click label (no longer used)
+## 0.1.3 — 2025-09-19
+- fix: dt diff Enter 行为 — 已选两条后，回车直接执行（即使光标移动）
+- chore: 清理 clippy 告警（dead_code、unnecessary_cast、too_many_arguments）
+- chore: 测试辅助迁移到 #[cfg(test)] 模块并隔离；删除临时测试脚本
+- ci: 新增 GitHub Actions 构建与打包流程，生成并上传产物
+- build: package.sh 集成 cargo-about/cargo-license 自动生成依赖许可证清单
+- docs: README 顶部新增非生产可用状态声明（EN/ZH）

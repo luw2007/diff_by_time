@@ -52,6 +52,9 @@ enum Commands {
         /// Maximum number of selection records to display [default: 20]
         #[arg(long)]
         max_shown: Option<usize>,
+        /// Compare strictly line-by-line (no cross-line alignment)
+        #[arg(long = "linewise")]
+        linewise: bool,
     },
     /// Clean history records
     Clean {
@@ -134,11 +137,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = Config::new()?;
     let i18n = I18n::new(&config.get_effective_language());
-    let store = StoreManager::new_with_config_and_base_dir(
-        config.clone(),
-        &i18n,
-        cli.data_dir.clone(),
-    )?;
+    let store =
+        StoreManager::new_with_config_and_base_dir(config.clone(), &i18n, cli.data_dir.clone())?;
 
     match cli.command {
         Commands::Run { command, diff_code } => {
@@ -192,7 +192,7 @@ fn main() -> Result<()> {
                 {
                     let mut pair = vec![target, execution.clone()];
                     pair.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
-                    if let Some(diff_output) = Differ::diff_executions(&pair, &i18n) {
+                    if let Some(diff_output) = Differ::diff_executions(&pair, &i18n, false) {
                         print!("{}", diff_output);
                     }
                 } else {
@@ -200,7 +200,11 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Diff { command, max_shown } => {
+        Commands::Diff {
+            command,
+            max_shown,
+            linewise,
+        } => {
             // Resolve TUI settings (env overrides config if present)
             let tui_simple = std::env::var("DT_TUI")
                 .ok()
@@ -234,6 +238,7 @@ fn main() -> Result<()> {
                         tui_simple,
                         use_alt_screen,
                         max_shown,
+                        linewise,
                         || {
                             store_ref
                                 .find_executions(&hash_clone, &i18n)
@@ -242,7 +247,7 @@ fn main() -> Result<()> {
                         Some(|exec: &CommandExecution| store_ref.delete_execution(exec, &i18n)),
                     );
                 }
-                if let Some(diff_output) = Differ::diff_executions(&executions, &i18n) {
+                if let Some(diff_output) = Differ::diff_executions(&executions, &i18n, linewise) {
                     print!("{}", diff_output);
                 }
             } else {
@@ -253,6 +258,7 @@ fn main() -> Result<()> {
                     tui_simple,
                     use_alt_screen,
                     max_shown,
+                    linewise,
                 )?;
             }
         }
@@ -782,6 +788,10 @@ fn print_help(i18n: &I18n) {
                     "      --max-shown <MAX_SHOWN>  {}",
                     i18n.t("help_diff_max_shown")
                 );
+                println!(
+                    "      --linewise               {}",
+                    i18n.t("help_diff_linewise")
+                );
                 println!("  -h, --help                   Print help");
                 println!();
                 println!("{}", i18n.t("help_pipeline_tip"));
@@ -897,73 +907,77 @@ fn list_records_query(store: &StoreManager, query: &str, _i18n: &I18n, json: boo
     Ok(())
 }
 
-#[allow(dead_code)]
-fn list_records_file(
-    store: &StoreManager,
-    file_path: &std::path::Path,
-    _i18n: &I18n,
-    json: bool,
-) -> Result<()> {
-    let target_path = match std::fs::canonicalize(file_path) {
-        Ok(p) => p,
-        Err(_) => file_path.to_path_buf(),
-    };
-    let mut records = store.get_all_records()?;
-    records.retain(|record| {
-        let mut should = false;
-        if record.working_dir == target_path {
-            should = true;
-        }
-        let file_str = file_path.to_string_lossy();
-        let target_str = target_path.to_string_lossy();
-        if record.command.contains(file_str.as_ref())
-            || record.command.contains(target_str.as_ref())
-        {
-            should = true;
-        }
-        if let Some(rel_path) = pathdiff::diff_paths(file_path, &record.working_dir) {
-            let rel_str = rel_path.to_string_lossy();
-            if record.command.contains(rel_str.as_ref()) {
+#[cfg(test)]
+mod test_support_main {
+    use super::*;
+
+    pub fn list_records_file(
+        store: &StoreManager,
+        file_path: &std::path::Path,
+        _i18n: &I18n,
+        json: bool,
+    ) -> Result<()> {
+        let target_path = match std::fs::canonicalize(file_path) {
+            Ok(p) => p,
+            Err(_) => file_path.to_path_buf(),
+        };
+        let mut records = store.get_all_records()?;
+        records.retain(|record| {
+            let mut should = false;
+            if record.working_dir == target_path {
                 should = true;
             }
-        }
-        should
-    });
-    if json {
-        let out: Vec<serde_json::Value> = records
-            .iter()
-            .map(|r| {
-                serde_json::json!({
-                    "timestamp": r.timestamp.to_rfc3339(),
-                    "command": r.command,
-                    "command_hash": r.command_hash,
-                    "exit_code": r.exit_code,
-                    "duration_ms": r.duration_ms,
-                    "record_id": r.record_id,
-                    "short_code": r.short_code,
-                    "working_dir": r.working_dir,
+            let file_str = file_path.to_string_lossy();
+            let target_str = target_path.to_string_lossy();
+            if record.command.contains(file_str.as_ref())
+                || record.command.contains(target_str.as_ref())
+            {
+                should = true;
+            }
+            if let Some(rel_path) = pathdiff::diff_paths(file_path, &record.working_dir) {
+                let rel_str = rel_path.to_string_lossy();
+                if record.command.contains(rel_str.as_ref()) {
+                    should = true;
+                }
+            }
+            should
+        });
+        if json {
+            let out: Vec<serde_json::Value> = records
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "timestamp": r.timestamp.to_rfc3339(),
+                        "command": r.command,
+                        "command_hash": r.command_hash,
+                        "exit_code": r.exit_code,
+                        "duration_ms": r.duration_ms,
+                        "record_id": r.record_id,
+                        "short_code": r.short_code,
+                        "working_dir": r.working_dir,
+                    })
                 })
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&out)?);
-    } else {
-        for r in records {
-            let ts = r
-                .timestamp
-                .with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M:%S");
-            if let Some(code) = r.short_code.as_deref() {
-                println!(
-                    "{} exit={} dur={}ms [code:{}] {}",
-                    ts, r.exit_code, r.duration_ms, code, r.command
-                );
-            } else {
-                println!(
-                    "{} exit={} dur={}ms {}",
-                    ts, r.exit_code, r.duration_ms, r.command
-                );
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            for r in records {
+                let ts = r
+                    .timestamp
+                    .with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M:%S");
+                if let Some(code) = r.short_code.as_deref() {
+                    println!(
+                        "{} exit={} dur={}ms [code:{}] {}",
+                        ts, r.exit_code, r.duration_ms, code, r.command
+                    );
+                } else {
+                    println!(
+                        "{} exit={} dur={}ms {}",
+                        ts, r.exit_code, r.duration_ms, r.command
+                    );
+                }
             }
         }
+        Ok(())
     }
-    Ok(())
 }

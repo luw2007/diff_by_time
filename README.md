@@ -2,6 +2,17 @@
 
 dt lets you run shell commands, record their outputs over time, and compare results between runs. It provides a simple interactive selector (skim‑style fuzzy filtering) and colored diffs.
 
+> Status: Not production‑ready yet. Interfaces, data layout and behavior may change frequently.
+>
+> 状态：当前为非正式发布版本，尚未达到生产可用级别；接口、数据结构与行为可能会频繁变更。
+
+Generated previews:
+
+![dt run GIF](docs/gallery/dt-run.gif)
+
+
+![dt diff GIF](docs/gallery/dt-diff.gif)
+
 ## Quick Start
 
 - Build (debug): `cargo build`
@@ -10,24 +21,6 @@ dt lets you run shell commands, record their outputs over time, and compare resu
   - `cargo run -- run "ls | head -5"`
   - `cargo run -- diff "ls | head -5"`
   - `cargo run -- list` (compat alias; opens interactive diff selector)
-
-## Gallery
-
-Generate demo GIFs locally using VHS (not stored in git):
-
-```bash
-brew install vhs            # or follow VHS installation guide
-make gallery               # renders docs/vhs/*.tape to docs/gallery/*.gif
-open docs/gallery          # view generated GIFs locally
-```
-
-Tapes:
-- `docs/vhs/dt-diff.tape` → `docs/gallery/dt-diff.gif`
-- `docs/vhs/dt-run.tape`  → `docs/gallery/dt-run.gif`
-
-Notes:
-- Generated media under `docs/gallery/` is ignored by git (`.gitignore`).
-- Scripts fix terminal size and language for reproducible output.
 
 ## CLI Overview
 
@@ -120,6 +113,21 @@ alt_screen = false        # Use alternate screen in interactive mode
 
 - Commands run via `sh -c`. Do not pass untrusted input automatically.
 - Examples in tests and docs may show pipelines; quote commands appropriately.
+
+## Gallery
+
+Generate demo GIFs locally using VHS (not stored in git):
+
+```bash
+brew install vhs            # or follow VHS installation guide
+make gallery               # renders docs/vhs/*.tape to docs/gallery/*.gif
+open docs/gallery          # view generated GIFs locally
+```
+
+Tapes:
+- `docs/vhs/dt-diff.tape` → `docs/gallery/dt-diff.gif`
+- `docs/vhs/dt-run.tape`  → `docs/gallery/dt-run.gif`
+
 
 ## License
 

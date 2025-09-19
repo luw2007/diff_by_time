@@ -8,14 +8,15 @@ Set Theme "Dracula"
 
 Output "docs/gallery/dt-run.gif"
 
-# Data is prepared by scripts/demo_prep.sh (baseline 'a' for date).
 # Show brief usage first, then run twice with -d a to immediately show diffs.
-Type "./package/latest/dt --help"
+Type "dt --help"
 Enter
 Sleep 700ms
-Type "./package/latest/dt --data-dir /tmp/dt_demo_data run -d a date"
+
+Type "dt run date"
 Enter
 Sleep 800ms
-Type "./package/latest/dt --data-dir /tmp/dt_demo_data run -d a date"
+
+Type "dt run -d a date"
 Enter
-Sleep 800ms
+Sleep 3000ms
