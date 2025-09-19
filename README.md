@@ -24,7 +24,6 @@ open docs/gallery          # view generated GIFs locally
 Tapes:
 - `docs/vhs/dt-diff.tape` → `docs/gallery/dt-diff.gif`
 - `docs/vhs/dt-run.tape`  → `docs/gallery/dt-run.gif`
- - `docs/vhs/dt-diff-file-date.tape` → `docs/gallery/dt-diff-file-date.gif` (uses filesystem + date to create visible changes)
 
 Notes:
 - Generated media under `docs/gallery/` is ignored by git (`.gitignore`).

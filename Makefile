@@ -6,7 +6,7 @@ gallery-prep:
 
 gallery: gallery-prep
 	@set -e; \
-	for f in docs/vhs/*.tape; do \
+	for f in docs/vhs/dt-run.tape docs/vhs/dt-diff.tape; do \
 	  echo "[VHS] Rendering $$f"; \
 	  vhs "$$f"; \
 	done

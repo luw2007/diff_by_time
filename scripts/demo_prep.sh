@@ -45,7 +45,9 @@ prep_diff_date() {
   echo "[prep] Preparing simple date diff demo..."
   ensure_dt
   clean_query "date"
-  # Create only the initial baseline run so code 'a' exists.
+  # Create two runs so diff has enough records; code 'a' then 'b'.
+  ./package/latest/dt --data-dir "$DATA_DIR" run date >/dev/null
+  sleep 1
   ./package/latest/dt --data-dir "$DATA_DIR" run date >/dev/null
 }
 
