@@ -518,6 +518,7 @@ impl StoreManager {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 mod test_support {
     use super::*;
 

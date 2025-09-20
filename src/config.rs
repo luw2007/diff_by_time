@@ -32,7 +32,7 @@ impl Default for DisplayConfig {
             max_history_shown: 10,
             language: "auto".to_string(),
             tui_mode: "interactive".to_string(),
-            alt_screen: false,
+            alt_screen: true,
         }
     }
 }

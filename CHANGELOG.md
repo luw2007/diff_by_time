@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.6 — 2025-09-20
+- feat(ui): migrate interactive diff UI to ratatui; add preview scrollbar and toggleable stdout/stderr preview
+- feat(keys): Enter-to-diff from any focus; q back, Q quit; h/? help overlay (localized EN/ZH)
+- fix(preview): sanitize ANSI/\r to prevent layout corruption and cursor jumps
+- fix(scrollbar): dynamic thumb + viewport mapping; clamp offset; 100% thumb when content fits
+- chore(clean): remove legacy crossterm rendering code and unused helpers
+- docs(i18n): add preview help strings; update navigation hints
+
 ## 0.1.5 — 2025-09-19
 - feat: add `--version`/`-v` flags to print package version for Homebrew tests and scripts
 
