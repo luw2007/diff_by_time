@@ -1,5 +1,7 @@
 # dt — Command Execution Time Diff Tool
 
+[![Update Homebrew Tap](https://github.com/luw2007/diff_by_time/actions/workflows/update-tap.yml/badge.svg)](https://github.com/luw2007/diff_by_time/actions/workflows/update-tap.yml)
+
 dt lets you run shell commands, record their outputs over time, and compare results between runs. It provides a simple interactive selector (skim‑style fuzzy filtering) and colored diffs.
 
 > Status: Not production‑ready yet. Interfaces, data layout and behavior may change frequently.
@@ -19,8 +21,8 @@ Generated previews:
 - Build (release): `cargo build --release`
 - Run examples:
   - `cargo run -- run "ls | head -5"`
-  - `cargo run -- diff "ls | head -5"`
-  - `cargo run -- list` (compat alias; opens interactive diff selector)
+  - `cargo run -- diff "ls | head -5"`  # interactive selector + preview/diff
+  - `cargo run -- ls`                    # non-interactive listing (use --json for scripts)
 
 ## CLI Overview
 
@@ -45,11 +47,16 @@ dt run ls -l | wc
 - Interactive selection and comparison of historical runs.
 - Options:
   - `--max-shown <N>`: Limit selector viewport rows.
+  - `--linewise`: Compare strictly line-by-line (no cross-line alignment)
 
 `dt ls [QUERY] [--json]`
 - Non-interactive listing of stored command runs, sorted by most recent.
 - Accepts optional substring or subsequence `QUERY` filters; omit to show all.
 - Use `--json` for machine-readable output (records including timestamps and short codes).
+
+`dt parse [FILE] [--json]`
+- Parse a Bash snippet or file into an AST using tree-sitter-bash.
+- If `FILE` is omitted, reads from STDIN. Use `--json` to output the AST as JSON; otherwise prints an outline.
 
 `dt clean <SUBCOMMAND>`
 - Clean records by search, by file, or all.
@@ -67,15 +74,17 @@ Run `dt <COMMAND> --help` to see detailed usage for any subcommand.
 
 - Skim‑style fuzzy search for interactive selection (no external `fzf` required)
 - Colored diffs using `similar`
+- Preview scrollbar; help overlay (`h`/`?`); Enter-to-diff from either pane
+- Toggle preview target: `o` or `←/→` switches stdout/stderr
 - Per-command short codes for quick reference
 - Multi-language messages (English/Chinese) with English as default in code and docs
 - Packaging scripts and usage docs
- - Non-interactive listing for CI: `dt ls [QUERY] [--json]`
- - Safe cleaning with previews and confirmations; dry-run available for `dt clean search|file`
+  - Non-interactive listing for CI: `dt ls [QUERY] [--json]`
+  - Safe cleaning with previews and confirmations; dry-run available for `dt clean search|file`
 
 ## Configuration
 
-Config file is at `~/.dt/config.toml`. Environment variables can override some display settings.
+Config file is at `~/.dt/config.toml`. Environment variables can override display settings.
 
 ```toml
 [storage]
@@ -86,22 +95,28 @@ auto_archive = true
 max_history_shown = 10
 language = "auto"        # auto/en/zh
 tui_mode = "interactive" # interactive|simple
-alt_screen = false        # Use alternate screen in interactive mode
+alt_screen = true         # Use alternate screen in interactive mode (vim-like)
+```
+
+Environment overrides:
+
+```
+DT_TUI=interactive|simple   # force TUI mode
+DT_ALT_SCREEN=1              # use alt screen in interactive mode (prefer 1)
 ```
 
 ## Interactive UX
 
 - Left panel shows compact items: `code:<a..z> time:<YYYY-MM-DD HH:MM:SS>`
 - Right panel preview:
-  - Row 1 = `Path: …` (truncated to width)
-  - Row 2 = `Preview: stdout|stderr`
-  - File content follows; press `o` or `←/→` to toggle stdout/stderr
-- Bottom status bar shows concise help: selection step, `Filter: <input>`, and `j/k ↑/↓ Enter Del Esc`
-- Fuzzy filter: type to filter; uses substring/prefix/number priority plus skim fuzzy fallback
-- Navigation: `j/k` or arrow keys; `PgUp/PgDn`; `Ctrl-a/e` (home/end)
-- Selection: `Enter`
-- Editing: `Backspace`, `Shift+Backspace` (delete record), `Delete`, `Ctrl-u` (clear), `Ctrl-w` (delete word)
-- Exit: `Esc`; `Ctrl-c/d` also exits gracefully from interactive views
+  - Header shows `Path: …` and `Preview: stdout|stderr`
+  - Content area supports vertical scrolling with a visible scrollbar
+  - Press `o` or `←/→` to toggle stdout/stderr
+- Bottom status bar summarizes keys; press `h` or `?` for an overlay of preview shortcuts
+- Fuzzy filter: type to filter; substring/prefix/number priority plus skim‑style fuzzy fallback
+- Navigation: `j/k` or arrow keys; paging: `Space`/`f` down, `b`/`Backspace` up; `PgUp/PgDn`; half pages: `d`/`u`; top/bottom: `g/G`, `Home/End`
+- Selection: `Tab`/`Space`/`Enter` marks/opens preview; when two are selected, `Enter` runs diff
+- Back/quit from preview: `q`; quit app: `Q`; global `Esc` backs/exits
 
 ## Data Storage
 
@@ -127,6 +142,13 @@ open docs/gallery          # view generated GIFs locally
 Tapes:
 - `docs/vhs/dt-diff.tape` → `docs/gallery/dt-diff.gif`
 - `docs/vhs/dt-run.tape`  → `docs/gallery/dt-run.gif`
+
+
+## Releasing to Homebrew
+
+- This repo publishes a PR to `luw2007/homebrew-tap` on every GitHub Release via the workflow `update-tap.yml`.
+- Configure a repo secret `TAP_PUSH_TOKEN` with write access to the tap repo. Optional variables: `TAP_REPO` (default `luw2007/homebrew-tap`), `TAP_DEFAULT_BRANCH` (default `main`).
+- For manual steps and local verification, see `docs/homebrew_formula.md`.
 
 
 ## License

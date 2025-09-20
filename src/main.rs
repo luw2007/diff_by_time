@@ -87,11 +87,17 @@ enum CleanMode {
     Search {
         /// Search query (optional; if omitted, opens an interactive selector)
         query: Option<String>,
+        /// List matches without deleting
+        #[arg(long = "dry-run")]
+        dry_run: bool,
     },
     /// Clean by file
     File {
         /// File path (optional, if not provided will show related files list)
         file: Option<PathBuf>,
+        /// List matches without deleting
+        #[arg(long = "dry-run")]
+        dry_run: bool,
     },
     /// Clean all records
     All,
@@ -110,7 +116,6 @@ fn main() -> Result<()> {
             _ => {}
         }
     }
-
 
     // Check if help is requested
     let needs_help = args.contains(&"--help".to_string())
@@ -301,7 +306,7 @@ fn main() -> Result<()> {
             // Global flag for this invocation: if user typed ALL once, skip further confirms
             let mut skip_confirm_all = false;
             match mode {
-                CleanMode::Search { query } => {
+                CleanMode::Search { query, dry_run } => {
                     // Resolve TUI settings
                     let tui_simple = std::env::var("DT_TUI")
                         .ok()
@@ -367,6 +372,10 @@ fn main() -> Result<()> {
                             println!("{}", i18n.t("delete_nothing").yellow());
                             return Ok(());
                         }
+                        if dry_run {
+                            println!("{}", i18n.t_format("dry_run_total", &[&count.to_string()]));
+                            return Ok(());
+                        }
                         println!(
                             "{}",
                             i18n.t_format(
@@ -386,7 +395,7 @@ fn main() -> Result<()> {
                         );
                     }
                 }
-                CleanMode::File { file } => {
+                CleanMode::File { file, dry_run } => {
                     if let Some(file_path) = file {
                         // Preview and confirm
                         let all_records = store.get_all_records()?;
@@ -421,6 +430,10 @@ fn main() -> Result<()> {
                             .count();
                         if count == 0 {
                             println!("{}", i18n.t("delete_nothing").yellow());
+                            return Ok(());
+                        }
+                        if dry_run {
+                            println!("{}", i18n.t_format("dry_run_total", &[&count.to_string()]));
                             return Ok(());
                         }
                         println!(
@@ -735,6 +748,7 @@ fn print_help(i18n: &I18n) {
                 println!("  [QUERY]  {}", i18n.t("help_clean_search_arg"));
                 println!();
                 println!("{}", i18n.t("help_label_options"));
+                println!("      --dry-run  {}", i18n.t("help_clean_dry_run"));
                 println!("  -h, --help  Print help");
             }
             "file" => {
@@ -746,6 +760,7 @@ fn print_help(i18n: &I18n) {
                 println!("  [FILE]  {}", i18n.t("help_clean_file_arg"));
                 println!();
                 println!("{}", i18n.t("help_label_options"));
+                println!("      --dry-run  {}", i18n.t("help_clean_dry_run"));
                 println!("  -h, --help  Print help");
             }
             "all" => {
@@ -920,6 +935,7 @@ fn list_records_query(store: &StoreManager, query: &str, _i18n: &I18n, json: boo
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 mod test_support_main {
     use super::*;
 

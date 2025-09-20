@@ -6,16 +6,25 @@ use anyhow::Result;
 use chrono::{DateTime, Datelike};
 use colored::*;
 use crossterm::{
-    cursor::MoveTo,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    style::Print,
     terminal::{self},
-    QueueableCommand,
 };
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Style},
+    text::{Line, Span},
+    widgets::{
+        Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Wrap,
+    },
+    Terminal,
+};
+use regex::Regex;
 use similar::{ChangeTag, TextDiff};
 use std::io::{self, Write};
-use std::sync::Once;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use std::sync::OnceLock;
+use unicode_width::UnicodeWidthChar;
 
 pub struct Differ;
 
@@ -26,54 +35,48 @@ struct CommandGroup {
     latest: chrono::DateTime<chrono::Utc>,
 }
 
-const PREVIEW_MIN_WIDTH: usize = 80;
-const PREVIEW_LEFT_MIN_WIDTH: usize = 24;
-const PREVIEW_RIGHT_MIN_WIDTH: usize = 30;
-const MIN_TERMINAL_COLS: u16 = 80; // minimum terminal width to render two-column UI without deformation
-const MIN_TERMINAL_ROWS: u16 = 20; // minimum terminal height to render headers, list and preview
+// legacy terminal size constants removed (ratatui handles layout)
 
-#[derive(Clone, Copy)]
-enum PreviewTarget {
-    Stdout,
-    Stderr,
-}
-
-struct PreviewLayout {
-    left_width: usize,
-    preview_width: usize,
-    start_col: u16,
-    total_rows: u16,
-}
-
-impl PreviewTarget {
-    fn toggle(self) -> Self {
-        match self {
-            PreviewTarget::Stdout => PreviewTarget::Stderr,
-            PreviewTarget::Stderr => PreviewTarget::Stdout,
-        }
-    }
-
-    fn label_key(self) -> &'static str {
-        match self {
-            PreviewTarget::Stdout => "preview_stdout_header",
-            PreviewTarget::Stderr => "preview_stderr_header",
-        }
-    }
-
-    fn is_stdout(self) -> bool {
-        matches!(self, PreviewTarget::Stdout)
-    }
-}
+// legacy preview enums removed in ratatui rewrite
 
 impl Differ {
+    /// Sanitize text for safe TUI preview rendering:
+    /// - Strip ANSI escape sequences (CSI/SGR common forms)
+    /// - Convert carriage return `\r` to newline to preserve progress updates
+    /// - Drop other C0 control chars (except `\n`), expand tabs to spaces
+    fn sanitize_for_preview(text: &str) -> String {
+        // Compile ANSI regex once
+        static ANSI_RE: OnceLock<Regex> = OnceLock::new();
+        let re = ANSI_RE.get_or_init(|| {
+            // Covers ESC [ ... command (CSI sequences)
+            let pattern = r"\x1B\[[0-?]*[ -/]*[@-~]";
+            Regex::new(pattern).expect("valid ansi regex")
+        });
+
+        // Step 1: normalize carriage returns into newlines (typical for spinners/progress)
+        let mut s = text.replace('\r', "\n");
+        // Step 2: strip ANSI sequences
+        s = re.replace_all(&s, "").into_owned();
+        // Step 3: remove other control chars and expand tabs
+        let mut cleaned = String::with_capacity(s.len());
+        for ch in s.chars() {
+            match ch {
+                '\n' => cleaned.push('\n'),
+                '\t' => cleaned.push_str("    "),
+                _ if ch.is_control() => {
+                    // drop other control chars such as \x08 (backspace), \x07 (bell), etc.
+                }
+                _ => cleaned.push(ch),
+            }
+        }
+        cleaned
+    }
     fn is_backspace_event(key: &KeyEvent) -> bool {
         matches!(key.code, KeyCode::Backspace)
             || matches!(key.code, KeyCode::Char(c) if c as u32 == 8 || c as u32 == 127)
     }
 
-    fn is_shift_backspace_event(key: &KeyEvent) -> bool {
-        key.modifiers.contains(KeyModifiers::SHIFT) && Self::is_backspace_event(key)
-    }
+    // removed: shift+backspace handling from legacy UI
 
     pub fn select_prefix_for_clean(
         store: &StoreManager,
@@ -124,11 +127,174 @@ impl Differ {
                 }
             }
         } else {
-            Self::interactive_select_command_string(&groups, i18n, use_alt_screen, max_viewport)
+            Self::interactive_select_command_string_ratatui(
+                &groups,
+                i18n,
+                use_alt_screen,
+                max_viewport,
+            )
         };
         Ok(result)
     }
 
+    fn interactive_select_command_string_ratatui(
+        groups: &[CommandGroup],
+        i18n: &I18n,
+        use_alt_screen: bool,
+        _max_viewport: Option<usize>,
+    ) -> Option<String> {
+        if terminal::enable_raw_mode().is_err() {
+            return None;
+        }
+        let mut stdout = io::stdout();
+        if use_alt_screen {
+            let _ = crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen);
+        }
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend).ok()?;
+        // Ensure we start from a clean frame even without alt-screen
+        let _ = terminal.clear();
+
+        let mut filter_input = String::new();
+        let mut current_selection: usize = 0;
+
+        let compute = |filter: &str| -> Vec<usize> {
+            if filter.is_empty() {
+                return (0..groups.len()).collect();
+            }
+            let items: Vec<(usize, String)> = groups
+                .iter()
+                .enumerate()
+                .map(|(i, g)| {
+                    let dt = g
+                        .latest
+                        .with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d %H:%M:%S");
+                    (i, format!("{} {} {} {}", g.command, g.count, dt, i + 1))
+                })
+                .collect();
+            let m = SkimMatcher::new();
+            m.match_and_sort(filter, items)
+                .into_iter()
+                .map(|(i, _, _)| i)
+                .collect()
+        };
+        let mut filtered = compute("");
+
+        let draw = |f: &mut ratatui::Frame,
+                    i18n: &I18n,
+                    groups: &[CommandGroup],
+                    filter: &str,
+                    filtered: &Vec<usize>,
+                    sel: usize| {
+            let root = f.size();
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
+                .split(root);
+            // Full-frame clear prevents artifacts mixing with prior shell output
+            f.render_widget(Clear, root);
+            let header = Paragraph::new(Line::from(vec![
+                Span::raw(i18n.t("select_clean_command")),
+                Span::raw("  |  "),
+                Span::raw(i18n.t("status_filter")),
+                Span::raw(": "),
+                Span::raw(filter),
+            ]));
+            f.render_widget(header, rows[0]);
+
+            let mut items: Vec<ListItem> = Vec::new();
+            for (vis, &idx) in filtered.iter().enumerate() {
+                let g = &groups[idx];
+                let dt = g
+                    .latest
+                    .with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M:%S");
+                let line = format!(
+                    "{}: {} ({}: {}, {}: {})",
+                    vis + 1,
+                    g.command,
+                    i18n.t("count_label"),
+                    g.count,
+                    i18n.t("latest_label"),
+                    dt
+                );
+                items.push(ListItem::new(line));
+            }
+            let list = List::new(items)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(i18n.t("select_clean_command")),
+                )
+                .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
+            let mut state = ratatui::widgets::ListState::default();
+            if !filtered.is_empty() {
+                state.select(Some(sel));
+            }
+            f.render_stateful_widget(list, rows[1], &mut state);
+
+            let foot =
+                Paragraph::new(i18n.t("navigate_hint")).style(Style::default().fg(Color::Gray));
+            f.render_widget(foot, rows[2]);
+        };
+
+        let res = loop {
+            let _ = terminal
+                .draw(|f| draw(f, i18n, groups, &filter_input, &filtered, current_selection));
+            match event::read().ok()? {
+                Event::Key(k) => {
+                    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+                    match k.code {
+                        KeyCode::Esc => break None,
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            current_selection = current_selection.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if current_selection + 1 < filtered.len() {
+                                current_selection += 1;
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if let Some(&idx) = filtered.get(current_selection) {
+                                break Some(groups[idx].command.clone());
+                            }
+                        }
+                        KeyCode::Backspace | KeyCode::Delete => {
+                            filter_input.pop();
+                            filtered = compute(&filter_input);
+                            if current_selection >= filtered.len() {
+                                current_selection = filtered.len().saturating_sub(1);
+                            }
+                        }
+                        KeyCode::Char(c) if !ctrl => {
+                            filter_input.push(c);
+                            filtered = compute(&filter_input);
+                            current_selection = 0;
+                        }
+                        KeyCode::Char('c') if ctrl => break None,
+                        _ => {}
+                    }
+                }
+                Event::Resize(_, _) => {}
+                _ => {}
+            }
+        };
+
+        let mut out = io::stdout();
+        if use_alt_screen {
+            let _ = crossterm::execute!(out, crossterm::terminal::LeaveAlternateScreen);
+        }
+        let _ = terminal::disable_raw_mode();
+        res
+    }
+
+    // removed legacy crossterm command selector block
+    /*
     fn interactive_select_command_string(
         groups: &[CommandGroup],
         i18n: &I18n,
@@ -395,13 +561,14 @@ impl Differ {
             }
         }
     }
+    */
 
     pub fn select_file_for_clean(
         files: &[std::path::PathBuf],
         i18n: &I18n,
         tui_simple: bool,
         use_alt_screen: bool,
-        max_viewport: Option<usize>,
+        _max_viewport: Option<usize>,
     ) -> Result<Option<std::path::PathBuf>> {
         if files.is_empty() {
             return Ok(None);
@@ -425,160 +592,137 @@ impl Differ {
             return Ok(None);
         }
 
-        // Interactive mode
         if terminal::enable_raw_mode().is_err() {
             return Ok(None);
         }
         let mut stdout = io::stdout();
         if use_alt_screen {
-            print!("\x1b[?1049h");
+            let _ = crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen);
         }
-        print!("\x1b[?7l\x1b[?25l");
-        stdout.flush().ok();
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend).ok().unwrap();
 
         let mut filter_input = String::new();
-        let mut current_selection = 0usize;
-        let mut scroll_offset = 0usize;
-        let fuzzy = SkimMatcher::new();
+        let mut current_selection: usize = 0;
 
-        loop {
-            print!("\x1b[2J\x1b[H");
-            print!("{}\r\n", i18n.t("select_clean_file"));
-            print!("{}: ", i18n.t("interactive_filter"));
-            print!("{}\r\n\r\n", filter_input);
-
+        let compute = |filter: &str| -> Vec<usize> {
+            if filter.is_empty() {
+                return (0..files.len()).collect();
+            }
             let items: Vec<(usize, String)> = files
                 .iter()
                 .enumerate()
                 .map(|(i, p)| (i, p.display().to_string()))
                 .collect();
-            let filtered_indices: Vec<usize> = if filter_input.is_empty() {
-                (0..files.len()).collect()
-            } else {
-                let matched = fuzzy.match_and_sort(&filter_input, items);
-                matched.into_iter().map(|(i, _, _)| i).collect()
-            };
+            let m = SkimMatcher::new();
+            m.match_and_sort(filter, items)
+                .into_iter()
+                .map(|(i, _, _)| i)
+                .collect()
+        };
+        let mut filtered = compute("");
 
-            if filtered_indices.is_empty() {
-                print!("\x1b[31m{}\x1b[0m\r\n", i18n.t("no_matches"));
-            } else {
-                if current_selection >= filtered_indices.len() {
-                    current_selection = filtered_indices.len().saturating_sub(1);
-                }
-                let viewport = if let Some(v) = max_viewport {
-                    v.max(3)
-                } else {
-                    let (_cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-                    let reserved = 6usize;
-                    let mut v = rows as usize;
-                    v = v.saturating_sub(reserved);
-                    if v < 5 {
-                        v = 5;
-                    }
-                    v
-                };
-                if current_selection < scroll_offset {
-                    scroll_offset = current_selection;
-                } else if current_selection >= scroll_offset + viewport {
-                    scroll_offset = current_selection + 1 - viewport;
-                }
-                let end = (scroll_offset + viewport).min(filtered_indices.len());
-                for (list_idx, i_ref) in filtered_indices
-                    .iter()
-                    .enumerate()
-                    .skip(scroll_offset)
-                    .take(end - scroll_offset)
-                {
-                    let i = *i_ref;
-                    let line = format!("{}: {}", i + 1, files[i].display());
-                    if list_idx == current_selection {
-                        print!("\x1b[44;37m{}\x1b[0m\x1b[K\r\n", line);
-                    } else {
-                        print!("{}\x1b[K\r\n", line);
-                    }
-                }
+        let draw = |f: &mut ratatui::Frame,
+                    i18n: &I18n,
+                    files: &[std::path::PathBuf],
+                    filter: &str,
+                    filtered: &Vec<usize>,
+                    sel: usize| {
+            let root = f.size();
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
+                .split(root);
+            let header = Paragraph::new(Line::from(vec![
+                Span::styled(
+                    i18n.t("select_clean_file"),
+                    Style::default().fg(Color::Gray),
+                ),
+                Span::raw("  "),
+                Span::raw(i18n.t("status_filter")),
+                Span::raw(": "),
+                Span::raw(filter),
+            ]));
+            f.render_widget(header, rows[0]);
+
+            let mut items: Vec<ListItem> = Vec::new();
+            for (vis, &idx) in filtered.iter().enumerate() {
+                items.push(ListItem::new(format!(
+                    "{}: {}",
+                    vis + 1,
+                    files[idx].display()
+                )));
             }
+            let list = List::new(items)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(i18n.t("select_clean_file")),
+                )
+                .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
+            let mut state = ratatui::widgets::ListState::default();
+            if !filtered.is_empty() {
+                state.select(Some(sel));
+            }
+            f.render_stateful_widget(list, rows[1], &mut state);
 
-            print!("\r\n");
-            let (cols, _rows) = crossterm::terminal::size().unwrap_or((80, 24));
-            let hint = Self::truncate_for_column(&i18n.t("navigate_hint"), cols as usize);
-            print!("\x1b[90m{}\x1b[0m\r\n", hint);
-            stdout.flush().ok();
+            let foot =
+                Paragraph::new(i18n.t("navigate_hint")).style(Style::default().fg(Color::Gray));
+            f.render_widget(foot, rows[2]);
+        };
 
-            if let Ok(Event::Key(key)) = event::read() {
-                let is_ctrl_combo = key.modifiers.contains(KeyModifiers::CONTROL);
-                let is_ctrl_char =
-                    matches!(key.code, KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}');
-                if is_ctrl_combo || is_ctrl_char {
-                    let exit_match = match key.code {
-                        KeyCode::Char('c')
-                        | KeyCode::Char('C')
-                        | KeyCode::Char('d')
-                        | KeyCode::Char('D') => true,
-                        KeyCode::Char(cc) if cc == '\u{3}' || cc == '\u{4}' => true,
-                        _ => false,
-                    };
-                    if exit_match {
-                        if use_alt_screen {
-                            print!("\x1b[?1049l");
+        let res = loop {
+            let _ = terminal
+                .draw(|f| draw(f, i18n, files, &filter_input, &filtered, current_selection));
+            match event::read().ok() {
+                Some(Event::Key(k)) => {
+                    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+                    match k.code {
+                        KeyCode::Esc => break None,
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            current_selection = current_selection.saturating_sub(1);
                         }
-                        print!("\x1b[?7h\x1b[?25h");
-                        stdout.flush().ok();
-                        let _ = terminal::disable_raw_mode();
-                        return Ok(None);
-                    }
-                }
-                match key.code {
-                    KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                        current_selection = current_selection.saturating_sub(1);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                        if !filtered_indices.is_empty()
-                            && current_selection < filtered_indices.len() - 1
-                        {
-                            current_selection += 1;
-                        }
-                    }
-                    KeyCode::Enter => {
-                        if !filtered_indices.is_empty() {
-                            let i = filtered_indices[current_selection];
-                            if use_alt_screen {
-                                print!("\x1b[?1049l");
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if current_selection + 1 < filtered.len() {
+                                current_selection += 1;
                             }
-                            print!("\x1b[?7h\x1b[?25h");
-                            stdout.flush().ok();
-                            let _ = terminal::disable_raw_mode();
-                            return Ok(Some(files[i].clone()));
                         }
-                    }
-                    _ if Self::is_backspace_event(&key) => {
-                        filter_input.pop();
-                        current_selection = 0;
-                        scroll_offset = 0;
-                    }
-                    KeyCode::Delete => {
-                        filter_input.clear();
-                        current_selection = 0;
-                        scroll_offset = 0;
-                    }
-                    KeyCode::Esc => {
-                        if use_alt_screen {
-                            print!("\x1b[?1049l");
+                        KeyCode::Enter => {
+                            if let Some(&idx) = filtered.get(current_selection) {
+                                break Some(files[idx].clone());
+                            }
                         }
-                        print!("\x1b[?7h\x1b[?25h");
-                        stdout.flush().ok();
-                        let _ = terminal::disable_raw_mode();
-                        return Ok(None);
+                        KeyCode::Backspace | KeyCode::Delete => {
+                            filter_input.pop();
+                            filtered = compute(&filter_input);
+                            if current_selection >= filtered.len() {
+                                current_selection = filtered.len().saturating_sub(1);
+                            }
+                        }
+                        KeyCode::Char(c) if !ctrl => {
+                            filter_input.push(c);
+                            filtered = compute(&filter_input);
+                            current_selection = 0;
+                        }
+                        KeyCode::Char('c') if ctrl => break None,
+                        _ => {}
                     }
-                    KeyCode::Char(c) => {
-                        filter_input.push(c);
-                        current_selection = 0;
-                        scroll_offset = 0;
-                    }
-                    _ => {}
                 }
+                Some(Event::Resize(_, _)) => {}
+                _ => {}
             }
+        };
+
+        let mut out = io::stdout();
+        if use_alt_screen {
+            let _ = crossterm::execute!(out, crossterm::terminal::LeaveAlternateScreen);
         }
+        let _ = terminal::disable_raw_mode();
+        Ok(res)
     }
     pub fn command_then_diff_flow(
         store: &StoreManager,
@@ -619,10 +763,10 @@ impl Differ {
                 // Use simple two-number selection
                 executions = Self::simple_select_executions(&executions, i18n);
             } else {
-                // Interactive record selection with back support
+                // Interactive record selection (ratatui-based)
                 let store_ref = store;
                 let hash_clone = command_hash.clone();
-                executions = Self::start_interactive_selection_impl(
+                executions = Self::start_interactive_selection_ratatui(
                     &executions,
                     i18n,
                     use_alt_screen,
@@ -1001,29 +1145,7 @@ impl Differ {
         Some(output)
     }
 
-    fn compute_preview_layout(total_cols: usize, total_rows: u16) -> Option<PreviewLayout> {
-        if total_cols < PREVIEW_MIN_WIDTH {
-            return None;
-        }
-        // Prefer a ~1/3 split, then clamp by min widths
-        let mut left_width = (total_cols) / 3;
-        if left_width < PREVIEW_LEFT_MIN_WIDTH {
-            left_width = PREVIEW_LEFT_MIN_WIDTH;
-        }
-        if left_width > total_cols.saturating_sub(PREVIEW_RIGHT_MIN_WIDTH) {
-            left_width = total_cols.saturating_sub(PREVIEW_RIGHT_MIN_WIDTH);
-        }
-        let preview_width = total_cols.saturating_sub(left_width + 2);
-        if preview_width < PREVIEW_RIGHT_MIN_WIDTH {
-            return None;
-        }
-        Some(PreviewLayout {
-            left_width,
-            preview_width,
-            start_col: (left_width + 2).min(u16::MAX as usize) as u16,
-            total_rows,
-        })
-    }
+    // compute_preview_layout removed (ratatui handles layout)
 
     fn char_display_width(ch: char) -> usize {
         UnicodeWidthChar::width(ch).unwrap_or(1).max(1)
@@ -1081,277 +1203,210 @@ impl Differ {
         result
     }
 
-    fn truncate_for_column(text: &str, width: usize) -> String {
-        if width == 0 {
-            return String::new();
-        }
-        if UnicodeWidthStr::width(text) <= width {
-            return text.to_string();
-        }
-        let ellipsis = "…";
-        let ellipsis_width = UnicodeWidthStr::width(ellipsis);
-        let mut result = String::new();
-        let mut used = 0usize;
-        for ch in text.chars() {
-            let ch_width = Self::char_display_width(ch);
-            if used + ch_width + ellipsis_width > width {
-                break;
-            }
-            result.push(ch);
-            used += ch_width;
-        }
-        if result.is_empty() {
-            return ellipsis.to_string();
-        }
-        result.push('…');
-        result
-    }
+    // removed: truncate_for_column (ratatui handles wrapping/clipping)
 
     // Note: previous tail-focused truncation helper was removed as unused.
 
-    fn wrap_preview_content(content: &str, width: usize, max_lines: usize) -> (Vec<String>, bool) {
-        if width == 0 || max_lines == 0 {
-            return (Vec::new(), !content.is_empty());
-        }
-        let mut lines: Vec<String> = Vec::new();
-        let mut truncated = false;
+    // wrap_preview_content removed
+    /* fn draw_preview_panel(
+            stdout: &mut io::Stdout,
+            layout: &PreviewLayout,
+            i18n: &I18n,
+            preview_target: PreviewTarget,
+            focus_exec: Option<&CommandExecution>,
+            diff_pair: Option<(&CommandExecution, &CommandExecution)>,
+            linewise: bool,
+        ) -> io::Result<()> {
+            let max_rows = layout.total_rows.saturating_sub(1);
+            if max_rows == 0 {
+                return Ok(());
+            }
+            let max_rows = max_rows as usize;
 
-        for raw_line in content.split('\n') {
-            if lines.len() >= max_lines {
-                truncated = true;
-                break;
+            let toggle_hint = i18n.t("preview_toggle_short");
+            let header_text = if diff_pair.is_some() {
+                match preview_target {
+                    PreviewTarget::Stdout => i18n.t("preview_diff_stdout_header"),
+                    PreviewTarget::Stderr => i18n.t("preview_diff_stderr_header"),
+                }
+            } else {
+                i18n.t(preview_target.label_key())
+            };
+            let header_display = Self::truncate_for_column(
+                &format!("{}  ·  {}", header_text, toggle_hint),
+                layout.preview_width,
+            );
+
+            enum PreviewBody {
+                Text(String),
+                Lines(Vec<String>),
             }
 
-            if raw_line.is_empty() {
-                lines.push(String::new());
-                continue;
+            let (metadata_lines, body) = if let Some((earlier, later)) = diff_pair {
+                let earlier_local = earlier.record.timestamp.with_timezone(&chrono::Local);
+                let later_local = later.record.timestamp.with_timezone(&chrono::Local);
+                let short_code_label = i18n.t("short_code_label");
+                let earlier_code = earlier
+                    .record
+                    .short_code
+                    .clone()
+                    .unwrap_or_else(|| "—".to_string());
+                let later_code = later
+                    .record
+                    .short_code
+                    .clone()
+                    .unwrap_or_else(|| "—".to_string());
+                let earlier_label = i18n.t("diff_earlier_label");
+                let later_label = i18n.t("diff_later_label");
+                let label_width = earlier_label
+                    .chars()
+                    .count()
+                    .max(later_label.chars().count());
+                let earlier_line = format!(
+                    "- {:width$}: {} [{}: {}]",
+                    earlier_label,
+                    earlier_local.format("%Y-%m-%d %H:%M:%S"),
+                    short_code_label,
+                    earlier_code,
+                    width = label_width
+                );
+                let later_line = format!(
+                    "+ {:width$}: {} [{}: {}]",
+                    later_label,
+                    later_local.format("%Y-%m-%d %H:%M:%S"),
+                    short_code_label,
+                    later_code,
+                    width = label_width
+                );
+                let exec_time_line = i18n.t_format(
+                    "diff_execution_time",
+                    &[
+                        &earlier.record.duration_ms.to_string(),
+                        &later.record.duration_ms.to_string(),
+                    ],
+                );
+                let (old_text, new_text) = if preview_target.is_stdout() {
+                    (
+                        Self::sanitize_for_preview(earlier.stdout.as_str()),
+                        Self::sanitize_for_preview(later.stdout.as_str()),
+                    )
+                } else {
+                    (
+                        Self::sanitize_for_preview(earlier.stderr.as_str()),
+                        Self::sanitize_for_preview(later.stderr.as_str()),
+                    )
+                };
+                let body_text = if old_text == new_text {
+                    i18n.t("output_identical")
+                } else if linewise {
+                    Self::diff_preview_text_linewise(&old_text, &new_text)
+                } else {
+                    Self::diff_preview_text(&old_text, &new_text)
+                };
+                (
+                    vec![earlier_line, later_line, exec_time_line],
+                    PreviewBody::Text(body_text),
+                )
+            } else if let Some(execution) = focus_exec {
+                let raw_path = if preview_target.is_stdout() {
+                    execution.stdout_path.as_ref()
+                } else {
+                    execution.stderr_path.as_ref()
+                };
+                let path_text = raw_path
+                    .map(|p| i18n.t_format("preview_path_label", &[&p.display().to_string()]))
+                    .unwrap_or_else(|| i18n.t("preview_path_missing"));
+                let content = if preview_target.is_stdout() {
+                    Self::sanitize_for_preview(execution.stdout.as_str())
+                } else {
+                    Self::sanitize_for_preview(execution.stderr.as_str())
+                };
+                let body = if content.is_empty() {
+                    PreviewBody::Lines(vec![i18n.t("preview_empty")])
+                } else {
+                    PreviewBody::Text(content)
+                };
+                (vec![path_text], body)
+            } else {
+                (
+                    vec![i18n.t("preview_path_missing")],
+                    PreviewBody::Lines(vec![i18n.t("preview_no_selection")]),
+                )
+            };
+
+            let mut metadata_wrapped: Vec<String> = Vec::new();
+            for line in metadata_lines {
+                metadata_wrapped.extend(Self::wrap_line_to_width(&line, layout.preview_width));
             }
 
-            for segment in Self::wrap_line_to_width(raw_line, width) {
-                if lines.len() >= max_lines {
-                    truncated = true;
+            let header_rows = 1usize;
+            let available_body_lines = max_rows
+                .saturating_sub(header_rows + metadata_wrapped.len())
+                .max(1);
+
+            let body_lines = match body {
+                PreviewBody::Lines(lines) => lines,
+                PreviewBody::Text(text) => {
+                    if text.is_empty() {
+                        vec![i18n.t("preview_empty")]
+                    } else {
+                        let (mut wrapped, was_truncated) = Self::wrap_preview_content(
+                            &text,
+                            layout.preview_width,
+                            available_body_lines,
+                        );
+                        if wrapped.is_empty() {
+                            wrapped.push(i18n.t("preview_empty"));
+                        }
+                        if was_truncated {
+                            wrapped.push(i18n.t("preview_truncated_hint"));
+                        }
+                        wrapped
+                    }
+                }
+            };
+
+            // Draw vertical separator between panels
+            let sep_col = layout.start_col.saturating_sub(1);
+            for r in 0..max_rows {
+                stdout.queue(MoveTo(sep_col, r as u16))?;
+                stdout.queue(Print("│".to_string()))?;
+            }
+
+            let mut row = 0usize;
+            stdout.queue(MoveTo(layout.start_col, row as u16))?;
+            stdout.queue(Print(header_display))?;
+            row += 1;
+
+            for line in metadata_wrapped {
+                if row >= max_rows {
                     break;
                 }
-                lines.push(segment);
+                let display_line = Self::truncate_for_column(&line, layout.preview_width);
+                stdout.queue(MoveTo(layout.start_col, row as u16))?;
+                stdout.queue(Print(display_line))?;
+                row += 1;
             }
 
-            if truncated {
-                break;
-            }
-
-            // If there are more raw lines remaining and we already used all slots
-            if lines.len() >= max_lines {
-                truncated = true;
-                break;
-            }
-        }
-
-        if truncated && !lines.is_empty() {
-            let last_index = lines.len() - 1;
-            lines[last_index] = Self::truncate_for_column(&lines[last_index], width);
-            if !lines[last_index].ends_with('…') {
-                lines[last_index].push('…');
-            }
-        }
-
-        if lines.is_empty() {
-            lines.push(String::new());
-        }
-
-        (lines, truncated)
-    }
-    fn draw_preview_panel(
-        stdout: &mut io::Stdout,
-        layout: &PreviewLayout,
-        i18n: &I18n,
-        preview_target: PreviewTarget,
-        focus_exec: Option<&CommandExecution>,
-        diff_pair: Option<(&CommandExecution, &CommandExecution)>,
-        linewise: bool,
-    ) -> io::Result<()> {
-        let max_rows = layout.total_rows.saturating_sub(1);
-        if max_rows == 0 {
-            return Ok(());
-        }
-        let max_rows = max_rows as usize;
-
-        let toggle_hint = i18n.t("preview_toggle_short");
-        let header_text = if diff_pair.is_some() {
-            match preview_target {
-                PreviewTarget::Stdout => i18n.t("preview_diff_stdout_header"),
-                PreviewTarget::Stderr => i18n.t("preview_diff_stderr_header"),
-            }
-        } else {
-            i18n.t(preview_target.label_key())
-        };
-        let header_display = Self::truncate_for_column(
-            &format!("{}  ·  {}", header_text, toggle_hint),
-            layout.preview_width,
-        );
-
-        enum PreviewBody {
-            Text(String),
-            Lines(Vec<String>),
-        }
-
-        let (metadata_lines, body) = if let Some((earlier, later)) = diff_pair {
-            let earlier_local = earlier.record.timestamp.with_timezone(&chrono::Local);
-            let later_local = later.record.timestamp.with_timezone(&chrono::Local);
-            let short_code_label = i18n.t("short_code_label");
-            let earlier_code = earlier
-                .record
-                .short_code
-                .clone()
-                .unwrap_or_else(|| "—".to_string());
-            let later_code = later
-                .record
-                .short_code
-                .clone()
-                .unwrap_or_else(|| "—".to_string());
-            let earlier_label = i18n.t("diff_earlier_label");
-            let later_label = i18n.t("diff_later_label");
-            let label_width = earlier_label
-                .chars()
-                .count()
-                .max(later_label.chars().count());
-            let earlier_line = format!(
-                "- {:width$}: {} [{}: {}]",
-                earlier_label,
-                earlier_local.format("%Y-%m-%d %H:%M:%S"),
-                short_code_label,
-                earlier_code,
-                width = label_width
-            );
-            let later_line = format!(
-                "+ {:width$}: {} [{}: {}]",
-                later_label,
-                later_local.format("%Y-%m-%d %H:%M:%S"),
-                short_code_label,
-                later_code,
-                width = label_width
-            );
-            let exec_time_line = i18n.t_format(
-                "diff_execution_time",
-                &[
-                    &earlier.record.duration_ms.to_string(),
-                    &later.record.duration_ms.to_string(),
-                ],
-            );
-            let (old_text, new_text) = if preview_target.is_stdout() {
-                (earlier.stdout.as_str(), later.stdout.as_str())
-            } else {
-                (earlier.stderr.as_str(), later.stderr.as_str())
-            };
-            let body_text = if old_text == new_text {
-                i18n.t("output_identical")
-            } else if linewise {
-                Self::diff_preview_text_linewise(old_text, new_text)
-            } else {
-                Self::diff_preview_text(old_text, new_text)
-            };
-            (
-                vec![earlier_line, later_line, exec_time_line],
-                PreviewBody::Text(body_text),
-            )
-        } else if let Some(execution) = focus_exec {
-            let raw_path = if preview_target.is_stdout() {
-                execution.stdout_path.as_ref()
-            } else {
-                execution.stderr_path.as_ref()
-            };
-            let path_text = raw_path
-                .map(|p| i18n.t_format("preview_path_label", &[&p.display().to_string()]))
-                .unwrap_or_else(|| i18n.t("preview_path_missing"));
-            let content = if preview_target.is_stdout() {
-                execution.stdout.as_str()
-            } else {
-                execution.stderr.as_str()
-            };
-            let body = if content.is_empty() {
-                PreviewBody::Lines(vec![i18n.t("preview_empty")])
-            } else {
-                PreviewBody::Text(content.to_string())
-            };
-            (vec![path_text], body)
-        } else {
-            (
-                vec![i18n.t("preview_path_missing")],
-                PreviewBody::Lines(vec![i18n.t("preview_no_selection")]),
-            )
-        };
-
-        let mut metadata_wrapped: Vec<String> = Vec::new();
-        for line in metadata_lines {
-            metadata_wrapped.extend(Self::wrap_line_to_width(&line, layout.preview_width));
-        }
-
-        let header_rows = 1usize;
-        let available_body_lines = max_rows
-            .saturating_sub(header_rows + metadata_wrapped.len())
-            .max(1);
-
-        let body_lines = match body {
-            PreviewBody::Lines(lines) => lines,
-            PreviewBody::Text(text) => {
-                if text.is_empty() {
-                    vec![i18n.t("preview_empty")]
-                } else {
-                    let (mut wrapped, was_truncated) = Self::wrap_preview_content(
-                        &text,
-                        layout.preview_width,
-                        available_body_lines,
-                    );
-                    if wrapped.is_empty() {
-                        wrapped.push(i18n.t("preview_empty"));
-                    }
-                    if was_truncated {
-                        wrapped.push(i18n.t("preview_truncated_hint"));
-                    }
-                    wrapped
+            for line in body_lines {
+                if row >= max_rows {
+                    break;
                 }
+                let display_line = Self::truncate_for_column(&line, layout.preview_width);
+                stdout.queue(MoveTo(layout.start_col, row as u16))?;
+                stdout.queue(Print(format!("{}[K", display_line)))?;
+                row += 1;
             }
-        };
 
-        // Draw vertical separator between panels
-        let sep_col = layout.start_col.saturating_sub(1);
-        for r in 0..max_rows {
-            stdout.queue(MoveTo(sep_col, r as u16))?;
-            stdout.queue(Print("│".to_string()))?;
-        }
-
-        let mut row = 0usize;
-        stdout.queue(MoveTo(layout.start_col, row as u16))?;
-        stdout.queue(Print(header_display))?;
-        row += 1;
-
-        for line in metadata_wrapped {
-            if row >= max_rows {
-                break;
+            while row < max_rows {
+                stdout.queue(MoveTo(layout.start_col, row as u16))?;
+                stdout.queue(Print("[K".to_string()))?;
+                row += 1;
             }
-            let display_line = Self::truncate_for_column(&line, layout.preview_width);
-            stdout.queue(MoveTo(layout.start_col, row as u16))?;
-            stdout.queue(Print(display_line))?;
-            row += 1;
-        }
 
-        for line in body_lines {
-            if row >= max_rows {
-                break;
-            }
-            let display_line = Self::truncate_for_column(&line, layout.preview_width);
-            stdout.queue(MoveTo(layout.start_col, row as u16))?;
-            stdout.queue(Print(format!("{}[K", display_line)))?;
-            row += 1;
+            Ok(())
         }
-
-        while row < max_rows {
-            stdout.queue(MoveTo(layout.start_col, row as u16))?;
-            stdout.queue(Print("[K".to_string()))?;
-            row += 1;
-        }
-
-        Ok(())
-    }
+    */
 
     fn diff_preview_text(old: &str, new: &str) -> String {
         let diff = TextDiff::from_lines(old, new);
@@ -1465,6 +1520,603 @@ impl Differ {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn start_interactive_selection_ratatui<F, D>(
+        executions: &[CommandExecution],
+        i18n: &I18n,
+        use_alt_screen: bool,
+        linewise: bool,
+        _loader: F,
+        _on_escape_return_empty: bool,
+        _max_viewport: Option<usize>,
+        _delete_action: Option<D>,
+    ) -> Vec<CommandExecution>
+    where
+        F: FnMut() -> Vec<CommandExecution>,
+        D: FnMut(&CommandExecution) -> Result<()>,
+    {
+        // 1) Prepare terminal
+        if terminal::enable_raw_mode().is_err() {
+            println!("{}", i18n.t("warning_interactive_failed"));
+            return Self::simple_select_executions(executions, i18n);
+        }
+        let mut stdout = io::stdout();
+        if use_alt_screen {
+            let _ = crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen);
+        }
+        let _ = crossterm::execute!(stdout, crossterm::cursor::Hide);
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend).expect("init terminal");
+        // Clear once to avoid mixing with previous shell content when not using alt screen
+        let _ = terminal.clear();
+
+        // 2) App state
+        let mut filter_input = String::new();
+        let mut selected_ids: Vec<String> = Vec::new();
+        let mut current_selection: usize = 0;
+        // Preview shows stdout first, then stderr (stacked)
+        let mut preview_offset: u16 = 0; // Paragraph vertical scroll offset
+        let mut show_help: bool = false; // preview help overlay
+                                         // Focus model: Selection (left list & filter) vs Preview (right pane scrolling)
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Focus {
+            Selection,
+            Preview,
+        }
+        let mut focus = Focus::Selection;
+
+        let current_execs: Vec<CommandExecution> = executions.to_vec();
+        let display_executions: Vec<&CommandExecution> = current_execs.iter().collect();
+
+        let compute_filtered = |input: &str| -> Vec<usize> {
+            if input.is_empty() {
+                return (0..display_executions.len()).collect();
+            }
+            let items: Vec<(usize, String)> = display_executions
+                .iter()
+                .enumerate()
+                .map(|(i, exec)| {
+                    let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
+                    let date_str = local_time.format("%Y-%m-%d %H:%M:%S");
+                    let code = exec.record.short_code.clone().unwrap_or_default();
+                    let searchable = if code.is_empty() {
+                        format!("{} {} {}", i + 1, date_str, exec.record.command)
+                    } else {
+                        format!("{} {} {} {}", i + 1, date_str, exec.record.command, code)
+                    };
+                    (i, searchable)
+                })
+                .collect();
+            let matcher = SkimMatcher::new();
+            matcher
+                .match_and_sort(input, items)
+                .into_iter()
+                .map(|(i, _, _)| i)
+                .collect()
+        };
+        let mut filtered_indices = compute_filtered("");
+
+        // Initial draw
+        let _ = terminal.draw(|f| {
+            Self::render_ratatui_frame(
+                f,
+                i18n,
+                &filter_input,
+                &selected_ids,
+                current_selection,
+                &mut preview_offset,
+                &current_execs,
+                &display_executions,
+                &filtered_indices,
+                linewise,
+                matches!(focus, Focus::Preview),
+                show_help,
+            )
+        });
+
+        // 4) Event loop
+        loop {
+            if let Ok(ev) = event::read() {
+                match ev {
+                    Event::Key(key) => {
+                        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                        if ctrl && matches!(key.code, KeyCode::Char('c')) {
+                            break;
+                        }
+                        match (focus, key.code) {
+                            // Global
+                            (_, KeyCode::Esc) => {
+                                if matches!(focus, Focus::Preview) {
+                                    if show_help {
+                                        show_help = false;
+                                    } else {
+                                        focus = Focus::Selection;
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            // Selection focus: navigate & filter; Tab/Space/Enter to preview
+                            (Focus::Selection, KeyCode::Up)
+                            | (Focus::Selection, KeyCode::Char('k')) => {
+                                current_selection = current_selection.saturating_sub(1);
+                            }
+                            (Focus::Selection, KeyCode::Down)
+                            | (Focus::Selection, KeyCode::Char('j')) => {
+                                if current_selection + 1 < filtered_indices.len() {
+                                    current_selection += 1;
+                                }
+                            }
+                            (Focus::Selection, KeyCode::Tab)
+                            | (Focus::Selection, KeyCode::Enter)
+                            | (Focus::Selection, KeyCode::Char(' ')) => {
+                                // If already selected two, Enter finalizes directly
+                                if matches!(key.code, KeyCode::Enter) && selected_ids.len() == 2 {
+                                    break;
+                                }
+                                if let Some(&oi) = filtered_indices.get(current_selection) {
+                                    // toggle selection on Space/Enter; Tab just switches focus
+                                    if !matches!(key.code, KeyCode::Tab) {
+                                        let id = display_executions[oi].record.record_id.clone();
+                                        if let Some(pos) =
+                                            selected_ids.iter().position(|x| x == &id)
+                                        {
+                                            selected_ids.remove(pos);
+                                        } else if selected_ids.len() < 2 {
+                                            selected_ids.push(id);
+                                        }
+                                    }
+                                    // If two selected or user requested Tab/Space, go to preview
+                                    preview_offset = 0;
+                                    focus = Focus::Preview;
+                                }
+                            }
+                            (Focus::Selection, KeyCode::Char(c)) if !ctrl => {
+                                filter_input.push(c);
+                                current_selection = 0;
+                                preview_offset = 0;
+                                filtered_indices = compute_filtered(&filter_input);
+                            }
+                            (Focus::Selection, KeyCode::Backspace)
+                            | (Focus::Selection, KeyCode::Delete) => {
+                                filter_input.pop();
+                                current_selection = 0;
+                                preview_offset = 0;
+                                filtered_indices = compute_filtered(&filter_input);
+                            }
+
+                            // Preview focus: scroll only; typing disabled
+                            (Focus::Preview, KeyCode::Up)
+                            | (Focus::Preview, KeyCode::Char('k')) => {
+                                // Alt+Up: half page up; otherwise 1 line
+                                if key.modifiers.contains(KeyModifiers::ALT) {
+                                    let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
+                                    preview_offset = preview_offset.saturating_sub(half);
+                                } else {
+                                    preview_offset = preview_offset.saturating_sub(1);
+                                }
+                            }
+                            (Focus::Preview, KeyCode::Down)
+                            | (Focus::Preview, KeyCode::Char('j')) => {
+                                // Alt+Down: half page down; otherwise 1 line
+                                if key.modifiers.contains(KeyModifiers::ALT) {
+                                    let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
+                                    preview_offset = preview_offset.saturating_add(half);
+                                } else {
+                                    preview_offset = preview_offset.saturating_add(1);
+                                }
+                            }
+                            (Focus::Preview, KeyCode::PageUp) => {
+                                let page = terminal
+                                    .size()
+                                    .map(|r| r.height.saturating_sub(4))
+                                    .unwrap_or(10);
+                                preview_offset = preview_offset.saturating_sub(page);
+                            }
+                            (Focus::Preview, KeyCode::PageDown) => {
+                                let page = terminal
+                                    .size()
+                                    .map(|r| r.height.saturating_sub(4))
+                                    .unwrap_or(10);
+                                preview_offset = preview_offset.saturating_add(page);
+                            }
+                            // less-like keys
+                            (Focus::Preview, KeyCode::Char(' ')) => {
+                                let page = terminal
+                                    .size()
+                                    .map(|r| r.height.saturating_sub(4))
+                                    .unwrap_or(10);
+                                preview_offset = preview_offset.saturating_add(page);
+                            }
+                            (Focus::Preview, KeyCode::Backspace)
+                            | (Focus::Preview, KeyCode::Char('b')) => {
+                                let page = terminal
+                                    .size()
+                                    .map(|r| r.height.saturating_sub(4))
+                                    .unwrap_or(10);
+                                preview_offset = preview_offset.saturating_sub(page);
+                            }
+                            (Focus::Preview, KeyCode::Char('f')) => {
+                                let page = terminal
+                                    .size()
+                                    .map(|r| r.height.saturating_sub(4))
+                                    .unwrap_or(10);
+                                preview_offset = preview_offset.saturating_add(page);
+                            }
+                            (Focus::Preview, KeyCode::Char('d')) => {
+                                let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
+                                preview_offset = preview_offset.saturating_add(half);
+                            }
+                            (Focus::Preview, KeyCode::Char('u')) => {
+                                let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
+                                preview_offset = preview_offset.saturating_sub(half);
+                            }
+                            (Focus::Preview, KeyCode::Home) => {
+                                preview_offset = 0;
+                            }
+                            (Focus::Preview, KeyCode::End) => {
+                                preview_offset = u16::MAX;
+                            }
+                            (Focus::Preview, KeyCode::Char('g'))
+                                if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) =>
+                            {
+                                preview_offset = 0;
+                            }
+                            (Focus::Preview, KeyCode::Char('G'))
+                                if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) =>
+                            {
+                                preview_offset = u16::MAX;
+                            }
+                            // Toggle help overlay
+                            (Focus::Preview, KeyCode::Char('?'))
+                            | (Focus::Preview, KeyCode::Char('h'))
+                                if !ctrl =>
+                            {
+                                show_help = !show_help;
+                            }
+                            // Quit/back keys: q back to Selection; Q quit all
+                            (Focus::Preview, KeyCode::Char('q')) => {
+                                focus = Focus::Selection;
+                            }
+                            (Focus::Preview, KeyCode::Char('Q')) => {
+                                break;
+                            }
+                            // Enter in preview: if two selected, finalize
+                            (Focus::Preview, KeyCode::Enter) => {
+                                if selected_ids.len() == 2 {
+                                    break;
+                                }
+                            }
+                            // Tab or Space in preview does nothing (Esc to go back)
+                            _ => {}
+                        }
+                    }
+                    Event::Resize(_, _) => {}
+                    _ => {}
+                }
+            }
+            let _ = terminal.draw(|f| {
+                Self::render_ratatui_frame(
+                    f,
+                    i18n,
+                    &filter_input,
+                    &selected_ids,
+                    current_selection,
+                    &mut preview_offset,
+                    &current_execs,
+                    &display_executions,
+                    &filtered_indices,
+                    linewise,
+                    matches!(focus, Focus::Preview),
+                    show_help,
+                )
+            });
+        }
+
+        // 5) Teardown
+        let _ = terminal.show_cursor();
+        let mut out = io::stdout();
+        if use_alt_screen {
+            let _ = crossterm::execute!(out, crossterm::terminal::LeaveAlternateScreen);
+        }
+        let _ = terminal::disable_raw_mode();
+
+        if selected_ids.len() == 2 {
+            let mut pair: Vec<CommandExecution> = selected_ids
+                .into_iter()
+                .filter_map(|id| {
+                    current_execs
+                        .iter()
+                        .find(|e| e.record.record_id == id)
+                        .cloned()
+                })
+                .collect();
+            if pair.len() == 2 {
+                pair.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
+                return pair;
+            }
+        }
+        Vec::new()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_ratatui_frame(
+        f: &mut ratatui::Frame,
+        i18n: &I18n,
+        filter_input: &str,
+        selected_ids: &[String],
+        current_selection: usize,
+        preview_offset: &mut u16,
+        current_execs: &[CommandExecution],
+        display_executions: &Vec<&CommandExecution>,
+        filtered_indices: &[usize],
+        linewise: bool,
+        preview_focused: bool,
+        show_help: bool,
+    ) {
+        // Ensure the frame is fully cleared to avoid artifacts under the UI
+        f.render_widget(Clear, f.size());
+        let header_line = Line::from(vec![
+            Span::styled(i18n.t("status_filter"), Style::default().fg(Color::Gray)),
+            Span::raw(": "),
+            Span::raw(filter_input),
+        ]);
+
+        let root = f.size();
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(root);
+
+        f.render_widget(Paragraph::new(header_line), rows[0]);
+
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .split(rows[1]);
+
+        // Left list
+        let mut items: Vec<ListItem> = Vec::new();
+        for (vis_idx, &orig_i) in filtered_indices.iter().enumerate() {
+            let exec = display_executions[orig_i];
+            let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
+            let date_str = local_time.format("%Y-%m-%d %H:%M:%S");
+            let mark = if selected_ids.iter().any(|id| id == &exec.record.record_id) {
+                "✓ "
+            } else {
+                "  "
+            };
+            let line = if let Some(code) = exec.record.short_code.as_deref() {
+                format!(
+                    "{}{}: {}:{} {}: {}",
+                    mark,
+                    vis_idx + 1,
+                    i18n.t("short_code_label"),
+                    code,
+                    i18n.t("time_label"),
+                    date_str
+                )
+            } else {
+                format!(
+                    "{}{}: {}: {}",
+                    mark,
+                    vis_idx + 1,
+                    i18n.t("time_label"),
+                    date_str
+                )
+            };
+            items.push(ListItem::new(line));
+        }
+        let list_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(if preview_focused {
+                Style::default()
+            } else {
+                Style::default().fg(Color::Cyan)
+            })
+            .title(i18n.t("select_executions"));
+        let list = List::new(items)
+            .block(list_block)
+            .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
+        let mut state = ratatui::widgets::ListState::default();
+        if !filtered_indices.is_empty() {
+            state.select(Some(current_selection));
+        }
+        f.render_stateful_widget(list, cols[0], &mut state);
+
+        // Right preview
+        let preview_pair = if selected_ids.len() == 2 {
+            let mut pair: Vec<&CommandExecution> = selected_ids
+                .iter()
+                .filter_map(|id| current_execs.iter().find(|e| &e.record.record_id == id))
+                .collect();
+            if pair.len() == 2 {
+                pair.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
+                Some((pair[0], pair[1]))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let focus_exec = filtered_indices
+            .get(current_selection)
+            .and_then(|&idx| display_executions.get(idx))
+            .copied();
+
+        // Build combined preview: stdout then stderr (with divider if both exist)
+        let mut title = i18n.t("preview_stdout_header");
+        let body = if let Some((earlier, later)) = preview_pair {
+            let so_old = Self::sanitize_for_preview(&earlier.stdout);
+            let so_new = Self::sanitize_for_preview(&later.stdout);
+            let se_old = Self::sanitize_for_preview(&earlier.stderr);
+            let se_new = Self::sanitize_for_preview(&later.stderr);
+            let mut out = String::new();
+            // stdout section
+            if so_old == so_new {
+                out.push_str(&i18n.t("output_identical"));
+                out.push('\n');
+            } else if linewise {
+                out.push_str(&Self::diff_preview_text_linewise(&so_old, &so_new));
+            } else {
+                out.push_str(&Self::diff_preview_text(&so_old, &so_new));
+            }
+            // stderr section
+            if !se_old.is_empty() || !se_new.is_empty() {
+                title = format!(
+                    "{}  |  {}",
+                    i18n.t("preview_diff_stdout_header"),
+                    i18n.t("preview_diff_stderr_header")
+                );
+                out.push_str("\n── stderr ─────────────────────────\n");
+                if se_old == se_new {
+                    out.push_str(&i18n.t("output_identical"));
+                } else if linewise {
+                    out.push_str(&Self::diff_preview_text_linewise(&se_old, &se_new));
+                } else {
+                    out.push_str(&Self::diff_preview_text(&se_old, &se_new));
+                }
+            } else {
+                title = i18n.t("preview_diff_stdout_header");
+            }
+            out
+        } else if let Some(exec) = focus_exec {
+            let so = Self::sanitize_for_preview(&exec.stdout);
+            let se = Self::sanitize_for_preview(&exec.stderr);
+            let mut out = String::new();
+            if so.is_empty() && se.is_empty() {
+                out.push_str(&i18n.t("preview_empty"));
+            } else {
+                out.push_str(&so);
+                if !se.is_empty() {
+                    title = format!(
+                        "{}  |  {}",
+                        i18n.t("preview_stdout_header"),
+                        i18n.t("preview_stderr_header")
+                    );
+                    out.push_str("\n── stderr ─────────────────────────\n");
+                    out.push_str(&se);
+                }
+            }
+            out
+        } else {
+            i18n.t("preview_no_selection")
+        };
+
+        let para_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(if preview_focused {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            })
+            .title(title);
+        // Compute inner width/height for accurate wrapping & clamping
+        let inner_w = cols[1].width.saturating_sub(2) as usize;
+        let inner_h = cols[1].height.saturating_sub(2) as usize;
+
+        // Count wrapped lines
+        let total_lines = Self::count_wrapped_lines(&body, inner_w);
+        let max_offset = total_lines.saturating_sub(inner_h);
+        let clamped = (*preview_offset as usize).min(max_offset) as u16;
+        *preview_offset = clamped;
+
+        let para = Paragraph::new(body)
+            .block(para_block)
+            .wrap(Wrap { trim: false })
+            .scroll((clamped, 0));
+        let preview_area = cols[1];
+        f.render_widget(para, preview_area);
+
+        // Scrollbar (basic)
+        let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"));
+        // If content fits within viewport, make the thumb 100% height
+        let (sb_content_len, sb_pos) = if total_lines <= inner_h {
+            (inner_h, 0usize)
+        } else {
+            (total_lines, clamped as usize)
+        };
+        let mut sb_state = ScrollbarState::new(sb_content_len)
+            .position(sb_pos)
+            .viewport_content_length(inner_h);
+        f.render_stateful_widget(sb, preview_area, &mut sb_state);
+
+        // Help overlay (Preview)
+        if show_help {
+            // Center a popup roughly 70% width, min 12 lines
+            let popup = {
+                let area = preview_area;
+                let w = (area.width as f32 * 0.7) as u16;
+                let h = 12u16;
+                let x = area.x + (area.width.saturating_sub(w)) / 2;
+                let y = area.y + (area.height.saturating_sub(h)) / 2;
+                ratatui::layout::Rect {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                }
+            };
+            let lines = vec![
+                i18n.t("preview_help_title"),
+                String::new(),
+                i18n.t("preview_help_move"),
+                i18n.t("preview_help_page"),
+                i18n.t("preview_help_half"),
+                i18n.t("preview_help_top_bottom"),
+                i18n.t("preview_help_back"),
+                i18n.t("preview_help_start_diff"),
+                format!(
+                    "{}   {}",
+                    i18n.t("preview_help_toggle"),
+                    i18n.t("preview_help_quit")
+                ),
+            ];
+            let help_text = Paragraph::new(lines.join("\n"))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(i18n.t("preview_help_title")),
+                )
+                .wrap(Wrap { trim: false });
+            f.render_widget(Clear, popup);
+            f.render_widget(help_text, popup);
+        }
+
+        // Footer
+        let status = if selected_ids.is_empty() {
+            i18n.t("status_select_first")
+        } else if selected_ids.len() == 1 {
+            i18n.t("status_select_second")
+        } else {
+            i18n.t("selection_complete")
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(status)).style(Style::default().fg(Color::Gray)),
+            rows[2],
+        );
+    }
+
+    fn count_wrapped_lines(text: &str, width: usize) -> usize {
+        if width == 0 {
+            return text.lines().count();
+        }
+        let mut total = 0usize;
+        for line in text.split('\n') {
+            let segs = Self::wrap_line_to_width(line, width);
+            total += segs.len().max(1);
+        }
+        total
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn interactive_select_executions_with_loader<F, D>(
         executions: &[CommandExecution],
         i18n: &I18n,
@@ -1482,7 +2134,7 @@ impl Differ {
         if tui_simple {
             return Self::simple_select_executions(executions, i18n);
         }
-        Self::start_interactive_selection_impl(
+        Self::start_interactive_selection_ratatui(
             executions,
             i18n,
             use_alt_screen,
@@ -1494,8 +2146,8 @@ impl Differ {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn start_interactive_selection_impl<F, D>(
+    // legacy crossterm selection impl (removed)
+    /* fn start_interactive_selection_impl<F, D>(
         executions: &[CommandExecution],
         i18n: &I18n,
         use_alt_screen: bool,
@@ -2230,6 +2882,7 @@ impl Differ {
             }
         }
     }
+    */
 
     fn simple_select_executions(
         executions: &[CommandExecution],
@@ -2532,6 +3185,7 @@ impl Differ {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 mod test_support {
     use super::*;
 
@@ -2617,7 +3271,7 @@ mod test_support {
                 return Self::simple_select_executions(executions, i18n);
             }
 
-            Self::start_interactive_selection_impl(
+            Self::start_interactive_selection_ratatui(
                 executions,
                 i18n,
                 use_alt_screen,

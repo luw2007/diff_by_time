@@ -4,7 +4,10 @@
 *.pdb
 
 # Package and distribution artifacts
-package/
+# Keep most of package/ untracked, but allow helper scripts/templates
+package/*
+!package/gen_formula.sh
+!package/formula_template.rb
 *.tar.gz
 *.zip
 
