@@ -1845,6 +1845,12 @@ impl Differ {
         let mut out = io::stdout();
         if use_alt_screen {
             let _ = crossterm::execute!(out, crossterm::terminal::LeaveAlternateScreen);
+        } else {
+            let _ = crossterm::execute!(
+                out,
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+                crossterm::cursor::MoveTo(0, 0)
+            );
         }
         let _ = terminal::disable_raw_mode();
 
@@ -2016,22 +2022,40 @@ impl Differ {
         } else if let Some(exec) = focus_exec {
             let so = Self::sanitize_for_preview(&exec.stdout);
             let se = Self::sanitize_for_preview(&exec.stderr);
-            let mut out = String::new();
-            if so.is_empty() && se.is_empty() {
-                out.push_str(&i18n.t("preview_empty"));
-            } else {
-                out.push_str(&so);
-                if !se.is_empty() {
-                    title = format!(
-                        "{}  |  {}",
-                        i18n.t("preview_stdout_header"),
-                        i18n.t("preview_stderr_header")
-                    );
-                    out.push_str("\n── stderr ─────────────────────────\n");
-                    out.push_str(&se);
-                }
+            let stdout_path_text = exec
+                .stdout_path
+                .as_ref()
+                .map(|p| i18n.t_format("preview_path_label", &[&p.display().to_string()]))
+                .unwrap_or_else(|| i18n.t("preview_path_missing"));
+            let stderr_path_text = exec
+                .stderr_path
+                .as_ref()
+                .map(|p| i18n.t_format("preview_path_label", &[&p.display().to_string()]))
+                .unwrap_or_else(|| i18n.t("preview_path_missing"));
+            let has_stderr_section = !se.is_empty();
+            if has_stderr_section {
+                title = format!(
+                    "{}  |  {}",
+                    i18n.t("preview_stdout_header"),
+                    i18n.t("preview_stderr_header")
+                );
             }
-            out
+            let empty_label = i18n.t("preview_empty");
+            let mut lines: Vec<String> = Vec::new();
+            let stdout_heading = i18n.t("stdout");
+            lines.push(format!("{} {}", stdout_heading, stdout_path_text));
+            if so.is_empty() {
+                lines.push(empty_label.clone());
+            } else {
+                lines.push(so);
+            }
+            if has_stderr_section {
+                lines.push(String::new());
+                let stderr_heading = i18n.t("stderr");
+                lines.push(format!("{} {}", stderr_heading, stderr_path_text));
+                lines.push(se);
+            }
+            lines.join("\n")
         } else {
             i18n.t("preview_no_selection")
         };
