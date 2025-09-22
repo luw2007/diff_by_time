@@ -28,12 +28,12 @@ jobs:
         env:
           VERSION_INPUT: ${{ github.event.inputs.version }}
         run: |
-          tag="${GITHUB_REF_NAME}"
+          tag="${VERSION_INPUT:-}"
           if [ -z "$tag" ]; then
-            tag="${{ github.event.release.tag_name }}"
+            tag="${GITHUB_REF_NAME:-}"
           fi
           if [ -z "$tag" ]; then
-            tag="$VERSION_INPUT"
+            tag="${{ github.event.release.tag_name }}"
           fi
           tag="${tag#refs/tags/}"
           if [ -z "$tag" ]; then
