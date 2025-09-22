@@ -1,4 +1,9 @@
 # Changelog
+## 0.1.7 — 2025-09-22
+- fix(tui): arrow keys in preview return focus to the list while modifier keys keep fine-grained scrolling
+- feat(keys): Enter toggles selection from preview and runs the diff automatically once two items are chosen
+- chore(ui): show total record count in the selector header and restore the compact navigation hint footer
+- docs: refresh README navigation notes and localized key hints
 
 ## 0.1.6 — 2025-09-20
 - feat(ui): migrate interactive diff UI to ratatui; add preview scrollbar and toggleable stdout/stderr preview
