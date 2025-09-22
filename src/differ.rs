@@ -1685,25 +1685,44 @@ impl Differ {
                                 filtered_indices = compute_filtered(&filter_input);
                             }
 
-                            // Preview focus: scroll only; typing disabled
+                            // Preview focus: Up/Down switch selection; modifier keys keep preview scrolling
                             (Focus::Preview, KeyCode::Up)
                             | (Focus::Preview, KeyCode::Char('k')) => {
-                                // Alt+Up: half page up; otherwise 1 line
                                 if key.modifiers.contains(KeyModifiers::ALT) {
                                     let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
                                     preview_offset = preview_offset.saturating_sub(half);
-                                } else {
+                                } else if key
+                                    .modifiers
+                                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+                                {
                                     preview_offset = preview_offset.saturating_sub(1);
+                                } else if !filtered_indices.is_empty() {
+                                    let before = current_selection;
+                                    current_selection = current_selection.saturating_sub(1);
+                                    focus = Focus::Selection;
+                                    show_help = false;
+                                    if current_selection != before {
+                                        preview_offset = 0;
+                                    }
                                 }
                             }
                             (Focus::Preview, KeyCode::Down)
                             | (Focus::Preview, KeyCode::Char('j')) => {
-                                // Alt+Down: half page down; otherwise 1 line
                                 if key.modifiers.contains(KeyModifiers::ALT) {
                                     let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
                                     preview_offset = preview_offset.saturating_add(half);
-                                } else {
+                                } else if key
+                                    .modifiers
+                                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+                                {
                                     preview_offset = preview_offset.saturating_add(1);
+                                } else if !filtered_indices.is_empty() {
+                                    if current_selection + 1 < filtered_indices.len() {
+                                        current_selection += 1;
+                                        preview_offset = 0;
+                                    }
+                                    focus = Focus::Selection;
+                                    show_help = false;
                                 }
                             }
                             (Focus::Preview, KeyCode::PageUp) => {
@@ -1781,10 +1800,18 @@ impl Differ {
                             (Focus::Preview, KeyCode::Char('Q')) => {
                                 break;
                             }
-                            // Enter in preview: if two selected, finalize
+                            // Enter in preview: toggle selection, finalize when two picked
                             (Focus::Preview, KeyCode::Enter) => {
                                 if selected_ids.len() == 2 {
                                     break;
+                                }
+                                if let Some(&oi) = filtered_indices.get(current_selection) {
+                                    let id = display_executions[oi].record.record_id.clone();
+                                    if let Some(pos) = selected_ids.iter().position(|x| x == &id) {
+                                        selected_ids.remove(pos);
+                                    } else if selected_ids.len() < 2 {
+                                        selected_ids.push(id);
+                                    }
                                 }
                             }
                             // Tab or Space in preview does nothing (Esc to go back)
@@ -1911,6 +1938,7 @@ impl Differ {
             };
             items.push(ListItem::new(line));
         }
+        let list_title = i18n.t_format("select_executions", &[&current_execs.len().to_string()]);
         let list_block = Block::default()
             .borders(Borders::ALL)
             .border_style(if preview_focused {
@@ -1918,7 +1946,7 @@ impl Differ {
             } else {
                 Style::default().fg(Color::Cyan)
             })
-            .title(i18n.t("select_executions"));
+            .title(list_title);
         let list = List::new(items)
             .block(list_block)
             .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
@@ -2098,8 +2126,14 @@ impl Differ {
         } else {
             i18n.t("selection_complete")
         };
+        let nav_hint = i18n.t("status_nav_compact");
+        let mut footer_spans = vec![Span::raw(status)];
+        if !nav_hint.is_empty() {
+            footer_spans.push(Span::raw("  |  "));
+            footer_spans.push(Span::raw(nav_hint));
+        }
         f.render_widget(
-            Paragraph::new(Line::from(status)).style(Style::default().fg(Color::Gray)),
+            Paragraph::new(Line::from(footer_spans)).style(Style::default().fg(Color::Gray)),
             rows[2],
         );
     }

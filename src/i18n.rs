@@ -223,7 +223,7 @@ impl I18n {
         en.insert("status_filter".to_string(), "Filter".to_string());
         en.insert(
             "status_nav_compact".to_string(),
-            "Sel: type, j/k↑↓; Tab/Space/Enter→Preview | Prev: j/k↑↓, Alt+↑↓, Space/b/F PgUp/PgDn, d/u half, g/G Home/End, q back, Q exit".to_string(),
+            "Sel: type/jk, Space/Enter toggle, Tab→Preview | Prev: jk return, Shift/Ctrl+↑↓ scroll, Enter diff, q back, Q exit".to_string(),
         );
         en.insert(
             "delete_confirm_status".to_string(),
@@ -254,7 +254,7 @@ impl I18n {
             "Only two records can be compared at once. Deselect one to pick another.".to_string(),
         );
         en.insert("no_matches".to_string(), "No matches found".to_string());
-        en.insert("navigate_hint".to_string(), "Navigation — Selection: type to filter, j/k ↑/↓ move, Tab/Space/Enter → preview; Preview: j/k ↑/↓ scroll, Alt+↑/↓ half, Space/b/F or PgUp/PgDn page, d/u half, g/G or Home/End top/bottom, q back, Q exit; Esc back/exit".to_string());
+        en.insert("navigate_hint".to_string(), "Navigation — Selection: type/jk, Space/Enter toggle, Tab → preview; Preview: jk return, Shift/Ctrl+↑/↓ scroll, Enter toggle/diff, Space/b/F or PgUp/PgDn page, q back, Q exit; Esc back/exit".to_string());
         en.insert(
             "select_clean_command".to_string(),
             "Select a command to clean:".to_string(),
@@ -348,11 +348,11 @@ impl I18n {
         en.insert("preview_help_title".to_string(), "Preview Help".to_string());
         en.insert(
             "preview_help_move".to_string(),
-            "Move: j/k or Up/Down".to_string(),
+            "Change selection: j/k or Up/Down (returns to list and resets scroll)".to_string(),
         );
         en.insert(
             "preview_help_page".to_string(),
-            "Page: Space or f (down), b or Backspace (up)".to_string(),
+            "Scroll: Shift/Ctrl+Up/Down (line); Space or f (down), b or Backspace (up)".to_string(),
         );
         en.insert(
             "preview_help_half".to_string(),
@@ -368,7 +368,7 @@ impl I18n {
         );
         en.insert(
             "preview_help_start_diff".to_string(),
-            "Start diff (when 2 selected): Enter".to_string(),
+            "Toggle selection / start diff (2 selected): Enter".to_string(),
         );
         en.insert(
             "preview_help_toggle".to_string(),
@@ -661,7 +661,7 @@ impl I18n {
         zh.insert("status_filter".to_string(), "筛选".to_string());
         zh.insert(
             "status_nav_compact".to_string(),
-            "j/k ↑/↓ Enter 空格/Tab Shift+Backspace/Ctrl+X Del Esc".to_string(),
+            "选择: 输入/jk, 空格/Enter 切换, Tab 入预览 | 预览: jk 返回, Shift/Ctrl+↑↓ 逐行, Enter 比较, q 返回, Q 退出".to_string(),
         );
         zh.insert(
             "delete_confirm_status".to_string(),
@@ -692,7 +692,7 @@ impl I18n {
             "一次最多比较两条记录，请先取消其中一条再选择其它记录。".to_string(),
         );
         zh.insert("no_matches".to_string(), "没有找到匹配的记录".to_string());
-        zh.insert("navigate_hint".to_string(), "导航 — 选择: 输入即筛选, j/k 或 ↑/↓ 移动, Tab/Space/Enter → 进入预览；预览: j/k 或 ↑/↓ 滚动, Alt+↑/↓ 半页, 空格/b/F 或 PgUp/PgDn 翻页, d/u 半页, g/G 或 Home/End 顶/底, q 返回, Q 退出；Esc 返回/退出".to_string());
+        zh.insert("navigate_hint".to_string(), "导航 — 选择: 输入/jk, 空格/Enter 切换, Tab → 预览；预览: jk 返回, Shift/Ctrl+↑/↓ 逐行, Enter 切换/比较, 空格/b/F 或 PgUp/PgDn 翻页, q 返回, Q 退出；Esc 返回/退出".to_string());
         zh.insert(
             "select_clean_command".to_string(),
             "选择要清理的命令:".to_string(),
@@ -783,11 +783,11 @@ impl I18n {
         zh.insert("preview_help_title".to_string(), "预览帮助".to_string());
         zh.insert(
             "preview_help_move".to_string(),
-            "移动: j/k 或 上/下方向键".to_string(),
+            "切换选中: j/k 或 上/下方向键（返回列表并重置滚动）".to_string(),
         );
         zh.insert(
             "preview_help_page".to_string(),
-            "整页: 空格 或 f 向下，b 或 退格 向上".to_string(),
+            "滚动: Shift/Ctrl+↑/↓ 逐行；空格 或 f 向下，b 或 退格 向上".to_string(),
         );
         zh.insert(
             "preview_help_half".to_string(),
@@ -803,7 +803,7 @@ impl I18n {
         );
         zh.insert(
             "preview_help_start_diff".to_string(),
-            "开始对比（已选2条时）: Enter".to_string(),
+            "切换/对比（已选2条时）: Enter".to_string(),
         );
         zh.insert(
             "preview_help_toggle".to_string(),
