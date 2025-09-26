@@ -76,7 +76,173 @@ impl Differ {
             || matches!(key.code, KeyCode::Char(c) if c as u32 == 8 || c as u32 == 127)
     }
 
-    // removed: shift+backspace handling from legacy UI
+    fn compute_filtered_indices(executions: &[CommandExecution], input: &str) -> Vec<usize> {
+        if input.is_empty() {
+            return (0..executions.len()).collect();
+        }
+        let items: Vec<(usize, String)> = executions
+            .iter()
+            .enumerate()
+            .map(|(i, exec)| {
+                let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
+                let date_str = local_time.format("%Y-%m-%d %H:%M:%S");
+                let code = exec.record.short_code.clone().unwrap_or_default();
+                let searchable = if code.is_empty() {
+                    format!("{} {} {}", i + 1, date_str, exec.record.command)
+                } else {
+                    format!("{} {} {} {}", i + 1, date_str, exec.record.command, code)
+                };
+                (i, searchable)
+            })
+            .collect();
+        let matcher = SkimMatcher::new();
+        matcher
+            .match_and_sort(input, items)
+            .into_iter()
+            .map(|(i, _, _)| i)
+            .collect()
+    }
+
+    fn reload_and_filter<F>(
+        current_execs: &mut Vec<CommandExecution>,
+        loader: &mut F,
+        filter_input: &str,
+    ) -> Vec<usize>
+    where
+        F: FnMut() -> Vec<CommandExecution>,
+    {
+        *current_execs = loader();
+        Self::compute_filtered_indices(current_execs, filter_input)
+    }
+
+    fn clear_delete_state(
+        pending_delete: &mut Option<CommandExecution>,
+        last_action_message: &mut Option<String>,
+    ) {
+        if pending_delete.is_some() {
+            *pending_delete = None;
+            *last_action_message = None;
+        }
+    }
+
+    fn handle_delete_request<F, D>(
+        delete_action: &mut Option<D>,
+        loader: &mut F,
+        current_execs: &mut Vec<CommandExecution>,
+        filtered_indices: &mut Vec<usize>,
+        filter_input: &str,
+        selected_ids: &mut Vec<String>,
+        pending_delete: &mut Option<CommandExecution>,
+        last_action_message: &mut Option<String>,
+        current_selection: &mut usize,
+        preview_offset: &mut u16,
+        i18n: &I18n,
+    ) -> bool
+    where
+        F: FnMut() -> Vec<CommandExecution>,
+        D: FnMut(&CommandExecution) -> Result<()>,
+    {
+        if delete_action.is_none() {
+            return false;
+        }
+        if filtered_indices.is_empty() {
+            Self::clear_delete_state(pending_delete, last_action_message);
+            *last_action_message = Some(i18n.t("delete_nothing"));
+            return true;
+        }
+
+        let oi = filtered_indices[*current_selection];
+        let target_ref = &current_execs[oi];
+        let record_id = target_ref.record.record_id.clone();
+        let timestamp_display = target_ref
+            .record
+            .timestamp
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+        let target_exec = target_ref.clone();
+
+        if pending_delete.as_ref().map(|p| p.record.record_id.as_str()) == Some(record_id.as_str())
+        {
+            if let Some(delete_fn) = delete_action.as_mut() {
+                match delete_fn(&target_exec) {
+                    Ok(()) => {
+                        selected_ids.retain(|id| id != &record_id);
+                        *pending_delete = None;
+                        *last_action_message =
+                            Some(i18n.t_format("delete_success_status", &[&timestamp_display]));
+                        *filtered_indices =
+                            Self::reload_and_filter(current_execs, loader, filter_input);
+                        if filtered_indices.is_empty() {
+                            *current_selection = 0;
+                        } else if *current_selection >= filtered_indices.len() {
+                            *current_selection = filtered_indices.len() - 1;
+                        }
+                        *preview_offset = 0;
+                        return true;
+                    }
+                    Err(err) => {
+                        *pending_delete = Some(target_exec);
+                        *last_action_message =
+                            Some(i18n.t_format("delete_failed_status", &[&err.to_string()]));
+                        return true;
+                    }
+                }
+            }
+        } else {
+            *pending_delete = Some(target_exec);
+            *last_action_message =
+                Some(i18n.t_format("delete_confirm_status", &[&timestamp_display]));
+            return true;
+        }
+        false
+    }
+
+    fn handle_shift_backspace<F, D>(
+        delete_action: &mut Option<D>,
+        loader: &mut F,
+        current_execs: &mut Vec<CommandExecution>,
+        filtered_indices: &mut Vec<usize>,
+        filter_input: &mut String,
+        selected_ids: &mut Vec<String>,
+        pending_delete: &mut Option<CommandExecution>,
+        last_action_message: &mut Option<String>,
+        current_selection: &mut usize,
+        preview_offset: &mut u16,
+        in_selection_focus: bool,
+        i18n: &I18n,
+    ) -> bool
+    where
+        F: FnMut() -> Vec<CommandExecution>,
+        D: FnMut(&CommandExecution) -> Result<()>,
+    {
+        if delete_action.is_some() {
+            return Self::handle_delete_request(
+                delete_action,
+                loader,
+                current_execs,
+                filtered_indices,
+                filter_input,
+                selected_ids,
+                pending_delete,
+                last_action_message,
+                current_selection,
+                preview_offset,
+                i18n,
+            );
+        }
+
+        if in_selection_focus && !filter_input.is_empty() {
+            Self::clear_delete_state(pending_delete, last_action_message);
+            filter_input.pop();
+            *filtered_indices = Self::compute_filtered_indices(current_execs, filter_input);
+            *current_selection = 0;
+            *preview_offset = 0;
+            *last_action_message = None;
+            return true;
+        }
+        false
+    }
 
     pub fn select_prefix_for_clean(
         store: &StoreManager,
@@ -291,10 +457,7 @@ impl Differ {
         }
         let _ = terminal::disable_raw_mode();
         res
-    }
-
-    // removed legacy crossterm command selector block
-    /*
+    }    /*
     fn interactive_select_command_string(
         groups: &[CommandGroup],
         i18n: &I18n,
@@ -1208,205 +1371,6 @@ impl Differ {
     // Note: previous tail-focused truncation helper was removed as unused.
 
     // wrap_preview_content removed
-    /* fn draw_preview_panel(
-            stdout: &mut io::Stdout,
-            layout: &PreviewLayout,
-            i18n: &I18n,
-            preview_target: PreviewTarget,
-            focus_exec: Option<&CommandExecution>,
-            diff_pair: Option<(&CommandExecution, &CommandExecution)>,
-            linewise: bool,
-        ) -> io::Result<()> {
-            let max_rows = layout.total_rows.saturating_sub(1);
-            if max_rows == 0 {
-                return Ok(());
-            }
-            let max_rows = max_rows as usize;
-
-            let toggle_hint = i18n.t("preview_toggle_short");
-            let header_text = if diff_pair.is_some() {
-                match preview_target {
-                    PreviewTarget::Stdout => i18n.t("preview_diff_stdout_header"),
-                    PreviewTarget::Stderr => i18n.t("preview_diff_stderr_header"),
-                }
-            } else {
-                i18n.t(preview_target.label_key())
-            };
-            let header_display = Self::truncate_for_column(
-                &format!("{}  ·  {}", header_text, toggle_hint),
-                layout.preview_width,
-            );
-
-            enum PreviewBody {
-                Text(String),
-                Lines(Vec<String>),
-            }
-
-            let (metadata_lines, body) = if let Some((earlier, later)) = diff_pair {
-                let earlier_local = earlier.record.timestamp.with_timezone(&chrono::Local);
-                let later_local = later.record.timestamp.with_timezone(&chrono::Local);
-                let short_code_label = i18n.t("short_code_label");
-                let earlier_code = earlier
-                    .record
-                    .short_code
-                    .clone()
-                    .unwrap_or_else(|| "—".to_string());
-                let later_code = later
-                    .record
-                    .short_code
-                    .clone()
-                    .unwrap_or_else(|| "—".to_string());
-                let earlier_label = i18n.t("diff_earlier_label");
-                let later_label = i18n.t("diff_later_label");
-                let label_width = earlier_label
-                    .chars()
-                    .count()
-                    .max(later_label.chars().count());
-                let earlier_line = format!(
-                    "- {:width$}: {} [{}: {}]",
-                    earlier_label,
-                    earlier_local.format("%Y-%m-%d %H:%M:%S"),
-                    short_code_label,
-                    earlier_code,
-                    width = label_width
-                );
-                let later_line = format!(
-                    "+ {:width$}: {} [{}: {}]",
-                    later_label,
-                    later_local.format("%Y-%m-%d %H:%M:%S"),
-                    short_code_label,
-                    later_code,
-                    width = label_width
-                );
-                let exec_time_line = i18n.t_format(
-                    "diff_execution_time",
-                    &[
-                        &earlier.record.duration_ms.to_string(),
-                        &later.record.duration_ms.to_string(),
-                    ],
-                );
-                let (old_text, new_text) = if preview_target.is_stdout() {
-                    (
-                        Self::sanitize_for_preview(earlier.stdout.as_str()),
-                        Self::sanitize_for_preview(later.stdout.as_str()),
-                    )
-                } else {
-                    (
-                        Self::sanitize_for_preview(earlier.stderr.as_str()),
-                        Self::sanitize_for_preview(later.stderr.as_str()),
-                    )
-                };
-                let body_text = if old_text == new_text {
-                    i18n.t("output_identical")
-                } else if linewise {
-                    Self::diff_preview_text_linewise(&old_text, &new_text)
-                } else {
-                    Self::diff_preview_text(&old_text, &new_text)
-                };
-                (
-                    vec![earlier_line, later_line, exec_time_line],
-                    PreviewBody::Text(body_text),
-                )
-            } else if let Some(execution) = focus_exec {
-                let raw_path = if preview_target.is_stdout() {
-                    execution.stdout_path.as_ref()
-                } else {
-                    execution.stderr_path.as_ref()
-                };
-                let path_text = raw_path
-                    .map(|p| i18n.t_format("preview_path_label", &[&p.display().to_string()]))
-                    .unwrap_or_else(|| i18n.t("preview_path_missing"));
-                let content = if preview_target.is_stdout() {
-                    Self::sanitize_for_preview(execution.stdout.as_str())
-                } else {
-                    Self::sanitize_for_preview(execution.stderr.as_str())
-                };
-                let body = if content.is_empty() {
-                    PreviewBody::Lines(vec![i18n.t("preview_empty")])
-                } else {
-                    PreviewBody::Text(content)
-                };
-                (vec![path_text], body)
-            } else {
-                (
-                    vec![i18n.t("preview_path_missing")],
-                    PreviewBody::Lines(vec![i18n.t("preview_no_selection")]),
-                )
-            };
-
-            let mut metadata_wrapped: Vec<String> = Vec::new();
-            for line in metadata_lines {
-                metadata_wrapped.extend(Self::wrap_line_to_width(&line, layout.preview_width));
-            }
-
-            let header_rows = 1usize;
-            let available_body_lines = max_rows
-                .saturating_sub(header_rows + metadata_wrapped.len())
-                .max(1);
-
-            let body_lines = match body {
-                PreviewBody::Lines(lines) => lines,
-                PreviewBody::Text(text) => {
-                    if text.is_empty() {
-                        vec![i18n.t("preview_empty")]
-                    } else {
-                        let (mut wrapped, was_truncated) = Self::wrap_preview_content(
-                            &text,
-                            layout.preview_width,
-                            available_body_lines,
-                        );
-                        if wrapped.is_empty() {
-                            wrapped.push(i18n.t("preview_empty"));
-                        }
-                        if was_truncated {
-                            wrapped.push(i18n.t("preview_truncated_hint"));
-                        }
-                        wrapped
-                    }
-                }
-            };
-
-            // Draw vertical separator between panels
-            let sep_col = layout.start_col.saturating_sub(1);
-            for r in 0..max_rows {
-                stdout.queue(MoveTo(sep_col, r as u16))?;
-                stdout.queue(Print("│".to_string()))?;
-            }
-
-            let mut row = 0usize;
-            stdout.queue(MoveTo(layout.start_col, row as u16))?;
-            stdout.queue(Print(header_display))?;
-            row += 1;
-
-            for line in metadata_wrapped {
-                if row >= max_rows {
-                    break;
-                }
-                let display_line = Self::truncate_for_column(&line, layout.preview_width);
-                stdout.queue(MoveTo(layout.start_col, row as u16))?;
-                stdout.queue(Print(display_line))?;
-                row += 1;
-            }
-
-            for line in body_lines {
-                if row >= max_rows {
-                    break;
-                }
-                let display_line = Self::truncate_for_column(&line, layout.preview_width);
-                stdout.queue(MoveTo(layout.start_col, row as u16))?;
-                stdout.queue(Print(format!("{}[K", display_line)))?;
-                row += 1;
-            }
-
-            while row < max_rows {
-                stdout.queue(MoveTo(layout.start_col, row as u16))?;
-                stdout.queue(Print("[K".to_string()))?;
-                row += 1;
-            }
-
-            Ok(())
-        }
-    */
 
     fn diff_preview_text(old: &str, new: &str) -> String {
         let diff = TextDiff::from_lines(old, new);
@@ -1525,16 +1489,15 @@ impl Differ {
         i18n: &I18n,
         use_alt_screen: bool,
         linewise: bool,
-        _loader: F,
+        mut loader: F,
         _on_escape_return_empty: bool,
         _max_viewport: Option<usize>,
-        _delete_action: Option<D>,
+        mut delete_action: Option<D>,
     ) -> Vec<CommandExecution>
     where
         F: FnMut() -> Vec<CommandExecution>,
         D: FnMut(&CommandExecution) -> Result<()>,
     {
-        // 1) Prepare terminal
         if terminal::enable_raw_mode().is_err() {
             println!("{}", i18n.t("warning_interactive_failed"));
             return Self::simple_select_executions(executions, i18n);
@@ -1546,175 +1509,369 @@ impl Differ {
         let _ = crossterm::execute!(stdout, crossterm::cursor::Hide);
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend).expect("init terminal");
-        // Clear once to avoid mixing with previous shell content when not using alt screen
         let _ = terminal.clear();
 
-        // 2) App state
         let mut filter_input = String::new();
         let mut selected_ids: Vec<String> = Vec::new();
         let mut current_selection: usize = 0;
-        // Preview shows stdout first, then stderr (stacked)
-        let mut preview_offset: u16 = 0; // Paragraph vertical scroll offset
-        let mut show_help: bool = false; // preview help overlay
-                                         // Focus model: Selection (left list & filter) vs Preview (right pane scrolling)
+        let mut preview_offset: u16 = 0;
+        let mut show_help = false;
+
         #[derive(Clone, Copy, PartialEq, Eq)]
         enum Focus {
             Selection,
             Preview,
         }
         let mut focus = Focus::Selection;
+        let mut pending_delete: Option<CommandExecution> = None;
+        let mut last_action_message: Option<String> = None;
 
-        let current_execs: Vec<CommandExecution> = executions.to_vec();
-        let display_executions: Vec<&CommandExecution> = current_execs.iter().collect();
-
-        let compute_filtered = |input: &str| -> Vec<usize> {
-            if input.is_empty() {
-                return (0..display_executions.len()).collect();
-            }
-            let items: Vec<(usize, String)> = display_executions
-                .iter()
-                .enumerate()
-                .map(|(i, exec)| {
-                    let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
-                    let date_str = local_time.format("%Y-%m-%d %H:%M:%S");
-                    let code = exec.record.short_code.clone().unwrap_or_default();
-                    let searchable = if code.is_empty() {
-                        format!("{} {} {}", i + 1, date_str, exec.record.command)
-                    } else {
-                        format!("{} {} {} {}", i + 1, date_str, exec.record.command, code)
-                    };
-                    (i, searchable)
-                })
-                .collect();
-            let matcher = SkimMatcher::new();
-            matcher
-                .match_and_sort(input, items)
-                .into_iter()
-                .map(|(i, _, _)| i)
-                .collect()
+        let mut current_execs: Vec<CommandExecution> = if executions.is_empty() {
+            loader()
+        } else {
+            executions.to_vec()
         };
-        let mut filtered_indices = compute_filtered("");
+        if current_execs.is_empty() {
+            current_execs = loader();
+        }
+        let mut filtered_indices = Self::compute_filtered_indices(&current_execs, &filter_input);
 
-        // Initial draw
-        let _ = terminal.draw(|f| {
-            Self::render_ratatui_frame(
-                f,
-                i18n,
-                &filter_input,
-                &selected_ids,
-                current_selection,
-                &mut preview_offset,
-                &current_execs,
-                &display_executions,
-                &filtered_indices,
-                linewise,
-                matches!(focus, Focus::Preview),
-                show_help,
-            )
-        });
+        let mut needs_redraw = true;
 
-        // 4) Event loop
         loop {
-            if let Ok(ev) = event::read() {
-                match ev {
-                    Event::Key(key) => {
-                        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-                        if ctrl && matches!(key.code, KeyCode::Char('c')) {
+            if needs_redraw {
+                let _ = terminal.draw(|f| {
+                    Self::render_ratatui_frame(
+                        f,
+                        i18n,
+                        &filter_input,
+                        &selected_ids,
+                        current_selection,
+                        &mut preview_offset,
+                        &current_execs,
+                        &filtered_indices,
+                        linewise,
+                        matches!(focus, Focus::Preview),
+                        show_help,
+                        last_action_message.as_deref(),
+                    )
+                });
+                needs_redraw = false;
+            }
+
+            let event = match event::read() {
+                Ok(ev) => ev,
+                Err(_) => break,
+            };
+
+            match event {
+                Event::Key(key_event) => {
+                    let ctrl = key_event.modifiers.contains(KeyModifiers::CONTROL);
+                    let alt = key_event.modifiers.contains(KeyModifiers::ALT);
+                    let shift = key_event.modifiers.contains(KeyModifiers::SHIFT);
+
+                    let ctrl_exit =
+                        ctrl && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'));
+                    let ctrl_char_exit = matches!(
+                        key_event.code,
+                        KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}'
+                    );
+                    if ctrl_exit || ctrl_char_exit {
+                        selected_ids.clear();
+                        break;
+                    }
+
+                    match key_event.code {
+                        KeyCode::Esc => {
+                            if matches!(focus, Focus::Preview) {
+                                if show_help {
+                                    show_help = false;
+                                } else {
+                                    focus = Focus::Selection;
+                                }
+                                needs_redraw = true;
+                                continue;
+                            }
+                            selected_ids.clear();
                             break;
                         }
-                        match (focus, key.code) {
-                            // Global
-                            (_, KeyCode::Esc) => {
-                                if matches!(focus, Focus::Preview) {
-                                    if show_help {
-                                        show_help = false;
-                                    } else {
-                                        focus = Focus::Selection;
-                                    }
-                                } else {
-                                    break;
-                                }
-                            }
+                        KeyCode::Char('x') if ctrl => {
+                            needs_redraw |= Self::handle_delete_request(
+                                &mut delete_action,
+                                &mut loader,
+                                &mut current_execs,
+                                &mut filtered_indices,
+                                &filter_input,
+                                &mut selected_ids,
+                                &mut pending_delete,
+                                &mut last_action_message,
+                                &mut current_selection,
+                                &mut preview_offset,
+                                i18n,
+                            );
+                            continue;
+                        }
+                        KeyCode::Backspace if shift => {
+                            needs_redraw |= Self::handle_shift_backspace(
+                                &mut delete_action,
+                                &mut loader,
+                                &mut current_execs,
+                                &mut filtered_indices,
+                                &mut filter_input,
+                                &mut selected_ids,
+                                &mut pending_delete,
+                                &mut last_action_message,
+                                &mut current_selection,
+                                &mut preview_offset,
+                                matches!(focus, Focus::Selection),
+                                i18n,
+                            );
+                            continue;
+                        }
+                        _ => {}
+                    }
 
-                            // Selection focus: navigate & filter; Tab/Space/Enter to preview
-                            (Focus::Selection, KeyCode::Up)
-                            | (Focus::Selection, KeyCode::Char('k')) => {
-                                current_selection = current_selection.saturating_sub(1);
+                    match focus {
+                        Focus::Selection => match key_event.code {
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                if current_selection > 0 {
+                                    current_selection -= 1;
+                                    preview_offset = 0;
+                                }
+                                needs_redraw = true;
                             }
-                            (Focus::Selection, KeyCode::Down)
-                            | (Focus::Selection, KeyCode::Char('j')) => {
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
                                 if current_selection + 1 < filtered_indices.len() {
                                     current_selection += 1;
+                                    preview_offset = 0;
+                                }
+                                needs_redraw = true;
+                            }
+                            KeyCode::Char('p') if ctrl => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                if current_selection > 0 {
+                                    current_selection -= 1;
+                                    preview_offset = 0;
+                                }
+                                needs_redraw = true;
+                            }
+                            KeyCode::Char('n') if ctrl => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                if current_selection + 1 < filtered_indices.len() {
+                                    current_selection += 1;
+                                    preview_offset = 0;
+                                }
+                                needs_redraw = true;
+                            }
+                            KeyCode::PageUp => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                if current_selection >= 10 {
+                                    current_selection -= 10;
+                                } else {
+                                    current_selection = 0;
+                                }
+                                preview_offset = 0;
+                                needs_redraw = true;
+                            }
+                            KeyCode::PageDown => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                if !filtered_indices.is_empty() {
+                                    let max_index = filtered_indices.len() - 1;
+                                    current_selection = (current_selection + 10).min(max_index);
+                                    preview_offset = 0;
+                                    needs_redraw = true;
                                 }
                             }
-                            (Focus::Selection, KeyCode::Tab)
-                            | (Focus::Selection, KeyCode::Enter)
-                            | (Focus::Selection, KeyCode::Char(' ')) => {
-                                // If already selected two, Enter finalizes directly
-                                if matches!(key.code, KeyCode::Enter) && selected_ids.len() == 2 {
+                            KeyCode::Home | KeyCode::Char('a') if ctrl => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                current_selection = 0;
+                                preview_offset = 0;
+                                needs_redraw = true;
+                            }
+                            KeyCode::End | KeyCode::Char('e') if ctrl => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                if !filtered_indices.is_empty() {
+                                    current_selection = filtered_indices.len() - 1;
+                                    preview_offset = 0;
+                                    needs_redraw = true;
+                                }
+                            }
+                            KeyCode::Tab
+                            | KeyCode::BackTab
+                            | KeyCode::Char(' ')
+                            | KeyCode::Enter => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                if matches!(key_event.code, KeyCode::Enter)
+                                    && selected_ids.len() == 2
+                                {
                                     break;
                                 }
                                 if let Some(&oi) = filtered_indices.get(current_selection) {
-                                    // toggle selection on Space/Enter; Tab just switches focus
-                                    if !matches!(key.code, KeyCode::Tab) {
-                                        let id = display_executions[oi].record.record_id.clone();
+                                    if !matches!(key_event.code, KeyCode::Tab) {
+                                        let record_id = current_execs[oi].record.record_id.clone();
                                         if let Some(pos) =
-                                            selected_ids.iter().position(|x| x == &id)
+                                            selected_ids.iter().position(|id| id == &record_id)
                                         {
                                             selected_ids.remove(pos);
+                                            last_action_message = None;
                                         } else if selected_ids.len() < 2 {
-                                            selected_ids.push(id);
+                                            selected_ids.push(record_id);
+                                            if selected_ids.len() == 2 {
+                                                last_action_message =
+                                                    Some(i18n.t("selection_complete"));
+                                            } else {
+                                                last_action_message = None;
+                                            }
+                                        } else {
+                                            last_action_message =
+                                                Some(i18n.t("selection_limit_reached"));
                                         }
                                     }
-                                    // If two selected or user requested Tab/Space, go to preview
-                                    preview_offset = 0;
                                     focus = Focus::Preview;
+                                    preview_offset = 0;
+                                    needs_redraw = true;
                                 }
                             }
-                            (Focus::Selection, KeyCode::Char(c)) if !ctrl => {
+                            KeyCode::Char(c) if !ctrl && !alt => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
                                 filter_input.push(c);
+                                filtered_indices =
+                                    Self::compute_filtered_indices(&current_execs, &filter_input);
                                 current_selection = 0;
                                 preview_offset = 0;
-                                filtered_indices = compute_filtered(&filter_input);
+                                last_action_message = None;
+                                needs_redraw = true;
                             }
-                            (Focus::Selection, KeyCode::Backspace)
-                            | (Focus::Selection, KeyCode::Delete) => {
-                                filter_input.pop();
+                            KeyCode::Backspace => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                if !filter_input.is_empty() {
+                                    filter_input.pop();
+                                    filtered_indices = Self::compute_filtered_indices(
+                                        &current_execs,
+                                        &filter_input,
+                                    );
+                                    current_selection = 0;
+                                    preview_offset = 0;
+                                    last_action_message = None;
+                                    needs_redraw = true;
+                                }
+                            }
+                            KeyCode::Delete if !ctrl && !alt => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                if !filter_input.is_empty() {
+                                    filter_input.clear();
+                                    filtered_indices = Self::compute_filtered_indices(
+                                        &current_execs,
+                                        &filter_input,
+                                    );
+                                    current_selection = 0;
+                                    preview_offset = 0;
+                                    last_action_message = None;
+                                    needs_redraw = true;
+                                }
+                            }
+                            KeyCode::Char('u') if ctrl => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                filter_input.clear();
+                                filtered_indices = Self::reload_and_filter(
+                                    &mut current_execs,
+                                    &mut loader,
+                                    &filter_input,
+                                );
                                 current_selection = 0;
                                 preview_offset = 0;
-                                filtered_indices = compute_filtered(&filter_input);
+                                last_action_message = None;
+                                needs_redraw = true;
                             }
-
-                            // Preview focus: Up/Down switch selection; modifier keys keep preview scrolling
-                            (Focus::Preview, KeyCode::Up)
-                            | (Focus::Preview, KeyCode::Char('k')) => {
-                                if key.modifiers.contains(KeyModifiers::ALT) {
+                            KeyCode::Char('w') if ctrl => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                while filter_input.ends_with(char::is_whitespace) {
+                                    filter_input.pop();
+                                }
+                                while !filter_input.is_empty()
+                                    && !filter_input.ends_with(char::is_whitespace)
+                                {
+                                    filter_input.pop();
+                                }
+                                filtered_indices = Self::reload_and_filter(
+                                    &mut current_execs,
+                                    &mut loader,
+                                    &filter_input,
+                                );
+                                current_selection = 0;
+                                preview_offset = 0;
+                                last_action_message = None;
+                                needs_redraw = true;
+                            }
+                            _ => {}
+                        },
+                        Focus::Preview => match key_event.code {
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                if alt {
                                     let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
                                     preview_offset = preview_offset.saturating_sub(half);
-                                } else if key
-                                    .modifiers
-                                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
-                                {
+                                } else if ctrl || shift {
                                     preview_offset = preview_offset.saturating_sub(1);
                                 } else if !filtered_indices.is_empty() {
-                                    let before = current_selection;
+                                    let previous = current_selection;
                                     current_selection = current_selection.saturating_sub(1);
                                     focus = Focus::Selection;
                                     show_help = false;
-                                    if current_selection != before {
+                                    if current_selection != previous {
                                         preview_offset = 0;
                                     }
                                 }
+                                needs_redraw = true;
                             }
-                            (Focus::Preview, KeyCode::Down)
-                            | (Focus::Preview, KeyCode::Char('j')) => {
-                                if key.modifiers.contains(KeyModifiers::ALT) {
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                if alt {
                                     let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
                                     preview_offset = preview_offset.saturating_add(half);
-                                } else if key
-                                    .modifiers
-                                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
-                                {
+                                } else if ctrl || shift {
                                     preview_offset = preview_offset.saturating_add(1);
                                 } else if !filtered_indices.is_empty() {
                                     if current_selection + 1 < filtered_indices.len() {
@@ -1724,123 +1881,113 @@ impl Differ {
                                     focus = Focus::Selection;
                                     show_help = false;
                                 }
+                                needs_redraw = true;
                             }
-                            (Focus::Preview, KeyCode::PageUp) => {
+                            KeyCode::PageUp => {
                                 let page = terminal
                                     .size()
                                     .map(|r| r.height.saturating_sub(4))
                                     .unwrap_or(10);
                                 preview_offset = preview_offset.saturating_sub(page);
+                                needs_redraw = true;
                             }
-                            (Focus::Preview, KeyCode::PageDown) => {
+                            KeyCode::PageDown => {
                                 let page = terminal
                                     .size()
                                     .map(|r| r.height.saturating_sub(4))
                                     .unwrap_or(10);
                                 preview_offset = preview_offset.saturating_add(page);
+                                needs_redraw = true;
                             }
-                            // less-like keys
-                            (Focus::Preview, KeyCode::Char(' ')) => {
+                            KeyCode::Char(' ') => {
                                 let page = terminal
                                     .size()
                                     .map(|r| r.height.saturating_sub(4))
                                     .unwrap_or(10);
                                 preview_offset = preview_offset.saturating_add(page);
+                                needs_redraw = true;
                             }
-                            (Focus::Preview, KeyCode::Backspace)
-                            | (Focus::Preview, KeyCode::Char('b')) => {
+                            KeyCode::Backspace | KeyCode::Char('b') => {
                                 let page = terminal
                                     .size()
                                     .map(|r| r.height.saturating_sub(4))
                                     .unwrap_or(10);
                                 preview_offset = preview_offset.saturating_sub(page);
+                                needs_redraw = true;
                             }
-                            (Focus::Preview, KeyCode::Char('f')) => {
+                            KeyCode::Char('f') => {
                                 let page = terminal
                                     .size()
                                     .map(|r| r.height.saturating_sub(4))
                                     .unwrap_or(10);
                                 preview_offset = preview_offset.saturating_add(page);
+                                needs_redraw = true;
                             }
-                            (Focus::Preview, KeyCode::Char('d')) => {
+                            KeyCode::Char('d') => {
                                 let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
                                 preview_offset = preview_offset.saturating_add(half);
+                                needs_redraw = true;
                             }
-                            (Focus::Preview, KeyCode::Char('u')) => {
+                            KeyCode::Char('u') => {
                                 let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
                                 preview_offset = preview_offset.saturating_sub(half);
+                                needs_redraw = true;
                             }
-                            (Focus::Preview, KeyCode::Home) => {
+                            KeyCode::Home => {
                                 preview_offset = 0;
+                                needs_redraw = true;
                             }
-                            (Focus::Preview, KeyCode::End) => {
+                            KeyCode::End => {
                                 preview_offset = u16::MAX;
+                                needs_redraw = true;
                             }
-                            (Focus::Preview, KeyCode::Char('g'))
-                                if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) =>
-                            {
+                            KeyCode::Char('g') if !ctrl && !alt => {
                                 preview_offset = 0;
+                                needs_redraw = true;
                             }
-                            (Focus::Preview, KeyCode::Char('G'))
-                                if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) =>
-                            {
+                            KeyCode::Char('G') if !ctrl && !alt => {
                                 preview_offset = u16::MAX;
+                                needs_redraw = true;
                             }
-                            // Toggle help overlay
-                            (Focus::Preview, KeyCode::Char('?'))
-                            | (Focus::Preview, KeyCode::Char('h'))
-                                if !ctrl =>
-                            {
+                            KeyCode::Char('?') | KeyCode::Char('h') if !ctrl => {
                                 show_help = !show_help;
+                                needs_redraw = true;
                             }
-                            // Quit/back keys: q back to Selection; Q quit all
-                            (Focus::Preview, KeyCode::Char('q')) => {
+                            KeyCode::Char('q') => {
                                 focus = Focus::Selection;
+                                needs_redraw = true;
                             }
-                            (Focus::Preview, KeyCode::Char('Q')) => {
+                            KeyCode::Char('Q') => {
+                                selected_ids.clear();
                                 break;
                             }
-                            // Enter in preview: toggle selection, finalize when two picked
-                            (Focus::Preview, KeyCode::Enter) => {
+                            KeyCode::Enter => {
                                 if selected_ids.len() == 2 {
                                     break;
                                 }
                                 if let Some(&oi) = filtered_indices.get(current_selection) {
-                                    let id = display_executions[oi].record.record_id.clone();
-                                    if let Some(pos) = selected_ids.iter().position(|x| x == &id) {
+                                    let record_id = current_execs[oi].record.record_id.clone();
+                                    if let Some(pos) =
+                                        selected_ids.iter().position(|id| id == &record_id)
+                                    {
                                         selected_ids.remove(pos);
                                     } else if selected_ids.len() < 2 {
-                                        selected_ids.push(id);
+                                        selected_ids.push(record_id);
                                     }
+                                    needs_redraw = true;
                                 }
                             }
-                            // Tab or Space in preview does nothing (Esc to go back)
                             _ => {}
-                        }
+                        },
                     }
-                    Event::Resize(_, _) => {}
-                    _ => {}
                 }
+                Event::Resize(_, _) => {
+                    needs_redraw = true;
+                }
+                _ => {}
             }
-            let _ = terminal.draw(|f| {
-                Self::render_ratatui_frame(
-                    f,
-                    i18n,
-                    &filter_input,
-                    &selected_ids,
-                    current_selection,
-                    &mut preview_offset,
-                    &current_execs,
-                    &display_executions,
-                    &filtered_indices,
-                    linewise,
-                    matches!(focus, Focus::Preview),
-                    show_help,
-                )
-            });
         }
 
-        // 5) Teardown
         let _ = terminal.show_cursor();
         let mut out = io::stdout();
         if use_alt_screen {
@@ -1881,11 +2028,11 @@ impl Differ {
         current_selection: usize,
         preview_offset: &mut u16,
         current_execs: &[CommandExecution],
-        display_executions: &Vec<&CommandExecution>,
         filtered_indices: &[usize],
         linewise: bool,
         preview_focused: bool,
         show_help: bool,
+        last_action: Option<&str>,
     ) {
         // Ensure the frame is fully cleared to avoid artifacts under the UI
         f.render_widget(Clear, f.size());
@@ -1915,7 +2062,7 @@ impl Differ {
         // Left list
         let mut items: Vec<ListItem> = Vec::new();
         for (vis_idx, &orig_i) in filtered_indices.iter().enumerate() {
-            let exec = display_executions[orig_i];
+            let exec = &current_execs[orig_i];
             let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
             let date_str = local_time.format("%Y-%m-%d %H:%M:%S");
             let mark = if selected_ids.iter().any(|id| id == &exec.record.record_id) {
@@ -1980,8 +2127,7 @@ impl Differ {
 
         let focus_exec = filtered_indices
             .get(current_selection)
-            .and_then(|&idx| display_executions.get(idx))
-            .copied();
+            .and_then(|&idx| current_execs.get(idx));
 
         // Build combined preview: stdout then stderr (with divider if both exist)
         let mut title = i18n.t("preview_stdout_header");
@@ -2117,7 +2263,6 @@ impl Differ {
                 }
             };
             let lines = vec![
-                i18n.t("preview_help_title"),
                 String::new(),
                 i18n.t("preview_help_move"),
                 i18n.t("preview_help_page"),
@@ -2155,6 +2300,10 @@ impl Differ {
         if !nav_hint.is_empty() {
             footer_spans.push(Span::raw("  |  "));
             footer_spans.push(Span::raw(nav_hint));
+        }
+        if let Some(msg) = last_action {
+            footer_spans.push(Span::raw("  |  "));
+            footer_spans.push(Span::styled(msg, Style::default().fg(Color::Yellow)));
         }
         f.render_widget(
             Paragraph::new(Line::from(footer_spans)).style(Style::default().fg(Color::Gray)),
@@ -2203,744 +2352,6 @@ impl Differ {
             delete_action,
         )
     }
-
-    // legacy crossterm selection impl (removed)
-    /* fn start_interactive_selection_impl<F, D>(
-        executions: &[CommandExecution],
-        i18n: &I18n,
-        use_alt_screen: bool,
-        linewise: bool,
-        mut loader: F,
-        on_escape_return_empty: bool,
-        max_viewport: Option<usize>,
-        mut delete_action: Option<D>,
-    ) -> Vec<CommandExecution>
-    where
-        F: FnMut() -> Vec<CommandExecution>,
-        D: FnMut(&CommandExecution) -> Result<()>,
-    {
-        let mut stdout = io::stdout();
-
-        static INIT_CTRL_C: Once = Once::new();
-        INIT_CTRL_C.call_once(|| {
-            let _ = ctrlc::set_handler(move || {
-                // Best-effort restore terminal state and exit with 130
-                let _ = terminal::disable_raw_mode();
-                print!("\x1b[?7h\x1b[?25h\x1b[?1049l");
-                let _ = io::stdout().flush();
-                std::process::exit(130);
-            });
-        });
-
-        // Set terminal to raw mode, fallback to simple mode if failed
-        if terminal::enable_raw_mode().is_err() {
-            println!("{}", i18n.t("warning_interactive_failed"));
-            return Self::simple_select_executions(executions, i18n);
-        }
-
-        if use_alt_screen {
-            print!("\x1b[?1049h");
-        }
-        // Disable line wrap and hide cursor to avoid iTerm2 wrap glitches
-        print!("\x1b[?7l\x1b[?25l");
-        stdout.flush().ok();
-
-        // Mouse features are disabled to keep UI simple and robust
-
-        let mut selected_ids: Vec<String> = Vec::new();
-        let mut filter_input = String::new();
-        let mut current_selection = 0;
-        let mut scroll_offset: usize = 0;
-        let mut preview_target = PreviewTarget::Stdout;
-        let mut pending_delete: Option<CommandExecution> = None;
-        let mut last_action_message: Option<String> = None;
-
-        // Dataset (may reload on input)
-        let mut current_execs: Vec<CommandExecution> = executions.to_vec();
-        let mut display_executions: Vec<&CommandExecution> = current_execs.iter().collect();
-
-        loop {
-            // Use simple ANSI escape to clear screen and move cursor to top
-            print!("\x1b[2J\x1b[H");
-            stdout.flush().unwrap();
-            // Enforce minimum terminal size to avoid deformed layout on resize
-            let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-            if cols < MIN_TERMINAL_COLS || rows < MIN_TERMINAL_ROWS {
-                let warn = i18n.t_format(
-                    "terminal_too_small",
-                    &[
-                        &MIN_TERMINAL_COLS.to_string(),
-                        &MIN_TERMINAL_ROWS.to_string(),
-                        &cols.to_string(),
-                        &rows.to_string(),
-                    ],
-                );
-                print!("{}\r\n", warn);
-                stdout.flush().ok();
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                continue;
-            }
-
-            // Top prompts are removed; a compact bottom status bar shows select and filter hints
-
-            let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-            let mut layout = Self::compute_preview_layout(cols as usize, rows);
-            if layout.is_none() {
-                print!("{}\r\n", i18n.t("preview_single_column_notice"));
-            }
-
-            // Use skim-style fuzzy matching to filter records
-            let fuzzy_matcher = SkimMatcher::new();
-            let filtered_indices: Vec<usize> = if filter_input.is_empty() {
-                (0..display_executions.len()).collect()
-            } else {
-                let items: Vec<(usize, String)> = display_executions
-                    .iter()
-                    .enumerate()
-                    .map(|(i, exec)| {
-                        let display_num = (i + 1).to_string();
-                        let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
-                        let date_str = local_time.format("%Y-%m-%d %H:%M:%S").to_string();
-
-                        // Create searchable text containing serial number, time, command and short code
-                        let code = exec.record.short_code.clone().unwrap_or_default();
-                        let searchable_text = if code.is_empty() {
-                            format!("{} {} {}", display_num, date_str, exec.record.command)
-                        } else {
-                            format!(
-                                "{} {} {} {}",
-                                display_num, date_str, exec.record.command, code
-                            )
-                        };
-                        (i, searchable_text)
-                    })
-                    .collect();
-
-                // Use fuzzy matching for filtering
-                let matched_items = fuzzy_matcher.match_and_sort(&filter_input, items);
-                matched_items.into_iter().map(|(i, _, _)| i).collect()
-            };
-
-            // After we have filtered items, adapt the left panel width
-            if let Some(ref mut lay) = layout {
-                // Measure max display width of visible lines (without truncation)
-                use unicode_width::UnicodeWidthStr;
-                let mut max_w = 0usize;
-                let prefix_width = 2; // space for current selected mark "✓ " or two spaces
-                let end_pos_probe = (scroll_offset
-                    + if let Some(mv) = max_viewport {
-                        mv.max(3)
-                    } else {
-                        rows as usize
-                    })
-                .min(filtered_indices.len());
-                for original_i in filtered_indices
-                    .iter()
-                    .cloned()
-                    .skip(scroll_offset)
-                    .take(end_pos_probe.saturating_sub(scroll_offset))
-                {
-                    let exec = &display_executions[original_i];
-                    let actual_index = original_i + 1;
-                    let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
-                    let date_str = local_time.format("%Y-%m-%d %H:%M:%S").to_string();
-                    let code = exec.record.short_code.as_deref();
-                    let raw_line = if let Some(code) = code {
-                        format!(
-                            "{}: {}:{} {}: {}",
-                            actual_index,
-                            i18n.t("short_code_label"),
-                            code,
-                            i18n.t("time_label"),
-                            date_str,
-                        )
-                    } else {
-                        format!("{}: {}: {}", actual_index, i18n.t("time_label"), date_str,)
-                    };
-                    let w = prefix_width + UnicodeWidthStr::width(raw_line.as_str());
-                    if w > max_w {
-                        max_w = w;
-                    }
-                }
-                // Clamp left width between 20 and 45% of total columns, plus small padding
-                let total_cols = cols as usize;
-                let pad = 2usize;
-                let min_left = PREVIEW_LEFT_MIN_WIDTH.max(20);
-                let max_left = (total_cols as f32 * 0.45) as usize;
-                let desired = (max_w + pad).max(min_left).min(max_left);
-                // Ensure right side keeps its minimum width
-                let allowed_left = desired.min(total_cols.saturating_sub(PREVIEW_RIGHT_MIN_WIDTH));
-                lay.left_width = allowed_left;
-                lay.start_col = (lay.left_width + 2).min(u16::MAX as usize) as u16;
-                lay.preview_width = total_cols.saturating_sub(lay.left_width + 2);
-            }
-
-            // Display filtered records
-            if filtered_indices.is_empty() {
-                // Red text when nothing matches
-                print!("\x1b[31m{}\x1b[0m\r\n", i18n.t("no_matches"));
-            } else {
-                // Ensure current selection is within valid range
-                if current_selection >= filtered_indices.len() {
-                    current_selection = filtered_indices.len().saturating_sub(1);
-                }
-
-                // Determine viewport height from terminal size, reserve some lines for header/footer
-                let viewport = if let Some(mv) = max_viewport {
-                    let mut v = mv;
-                    if v < 3 {
-                        v = 3;
-                    }
-                    v
-                } else {
-                    let reserved_lines = 5usize; // filter (row0) + header (row1) + bottom status + preview padding
-                    let mut viewport = rows as usize;
-                    viewport = viewport.saturating_sub(reserved_lines);
-                    if viewport < 5 {
-                        viewport = 5;
-                    }
-                    viewport
-                };
-
-                // Row 0: filter input prompt + current input
-                print!("{}: {}\r\n", i18n.t("status_filter"), filter_input);
-                // Row 1: compact header: show current index / total as "cmd i/total"
-                let total = filtered_indices.len();
-                let current_display = if total == 0 { 0 } else { current_selection + 1 };
-                print!("(cmd {}/{})\r\n", current_display, total);
-
-                // Adjust scroll window to keep current selection visible
-                if current_selection < scroll_offset {
-                    scroll_offset = current_selection;
-                } else if current_selection >= scroll_offset + viewport {
-                    scroll_offset = current_selection + 1 - viewport;
-                }
-
-                let end_pos = (scroll_offset + viewport).min(filtered_indices.len());
-                // Keep the list simple; no visual scrollbar
-
-                for (list_idx, original_i_ref) in filtered_indices
-                    .iter()
-                    .enumerate()
-                    .skip(scroll_offset)
-                    .take(end_pos - scroll_offset)
-                {
-                    let original_i = *original_i_ref;
-                    let exec = &display_executions[original_i];
-                    let actual_index = original_i + 1;
-                    let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
-                    let date_str = local_time.format("%Y-%m-%d %H:%M:%S");
-
-                    // Fixed-width left padding; show checkmark for already selected entries
-                    let is_selected = selected_ids.iter().any(|id| id == &exec.record.record_id);
-                    let prefix = if is_selected { "✓ " } else { "  " };
-                    let code = exec.record.short_code.as_deref();
-                    let raw_line = if let Some(code) = code {
-                        format!(
-                            "{}{}: {}:{} {}: {}",
-                            prefix,
-                            actual_index,
-                            i18n.t("short_code_label"),
-                            code,
-                            i18n.t("time_label"),
-                            date_str,
-                        )
-                    } else {
-                        format!(
-                            "{}{}: {}: {}",
-                            prefix,
-                            actual_index,
-                            i18n.t("time_label"),
-                            date_str,
-                        )
-                    };
-                    let line = if let Some(ref layout) = layout {
-                        Self::truncate_for_column(&raw_line, layout.left_width.saturating_sub(1))
-                    } else {
-                        raw_line.clone()
-                    };
-
-                    // Current highlight line: put reset code in same line to avoid polluting next line
-                    if list_idx == current_selection {
-                        print!("\x1b[44;37m{}\x1b[0m\x1b[K\r\n", line);
-                    } else if is_selected {
-                        print!("\x1b[42;30m{}\x1b[0m\x1b[K\r\n", line);
-                    } else {
-                        print!("{}\x1b[K\r\n", line);
-                    }
-                }
-            }
-
-            // Bottom status bar: compact messages to avoid overflow (no filter echo here to avoid duplication)
-            let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-            let select_msg = if selected_ids.is_empty() {
-                i18n.t("status_select_first")
-            } else if selected_ids.len() == 1 {
-                i18n.t("status_select_second")
-            } else {
-                i18n.t("selection_complete")
-            };
-            let select_part = Self::truncate_for_column(&select_msg, (cols as usize) / 3);
-            let mut status = format!("{} | {}", select_part, i18n.t("status_nav_compact"));
-            if let Some(msg) = &last_action_message {
-                status.push_str(" | ");
-                status.push_str(msg);
-            }
-            // Move cursor to last line, clear to end, then draw the status bar
-            print!(
-                "\x1b[{};1H\x1b[90m{}\x1b[0m\x1b[K",
-                rows,
-                Self::truncate_for_column(&status, cols as usize),
-            );
-
-            if let Some(ref layout) = layout {
-                let preview_exec = filtered_indices
-                    .get(current_selection)
-                    .map(|&idx| display_executions[idx]);
-                let selected_pair = if selected_ids.len() == 2 {
-                    let mut pair: Vec<&CommandExecution> = selected_ids
-                        .iter()
-                        .filter_map(|id| {
-                            current_execs
-                                .iter()
-                                .find(|exec| &exec.record.record_id == id)
-                        })
-                        .collect();
-                    if pair.len() == 2 {
-                        pair.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
-                        Some((pair[0], pair[1]))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                let _ = Self::draw_preview_panel(
-                    &mut stdout,
-                    layout,
-                    i18n,
-                    preview_target,
-                    preview_exec,
-                    selected_pair,
-                    linewise,
-                );
-            }
-
-            // Refresh output
-            stdout.flush().unwrap();
-
-            // Read keyboard input
-            let mut clear_pending_delete = |last_action: &mut Option<String>| {
-                if pending_delete.is_some() {
-                    pending_delete = None;
-                    *last_action = None;
-                }
-            };
-
-            match event::read().unwrap() {
-                Event::Key(key_event) => {
-                    let mut toggle_selection = |step_down: bool| {
-                        if filtered_indices.is_empty() {
-                            return;
-                        }
-                        let oi = filtered_indices[current_selection];
-                        let ex = &display_executions[oi];
-                        if let Some(pos) = selected_ids
-                            .iter()
-                            .position(|id| id == &ex.record.record_id)
-                        {
-                            selected_ids.remove(pos);
-                            last_action_message = None;
-                        } else if selected_ids.len() >= 2 {
-                            last_action_message = Some(i18n.t("selection_limit_reached"));
-                            return;
-                        } else {
-                            selected_ids.push(ex.record.record_id.clone());
-                            if selected_ids.len() == 2 {
-                                last_action_message = Some(i18n.t("selection_complete"));
-                            } else {
-                                last_action_message = None;
-                            }
-                        }
-                        if step_down {
-                            let max_idx = filtered_indices.len().saturating_sub(1);
-                            if current_selection < max_idx {
-                                current_selection += 1;
-                            }
-                        }
-                    };
-
-                    // Handle Ctrl+C / Ctrl+D for exit (modifiers or control chars)
-                    let is_ctrl_combo = key_event.modifiers.contains(KeyModifiers::CONTROL);
-                    let is_ctrl_char = match key_event.code {
-                        KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}' => true, // ETX (^C) or EOT (^D)
-                        _ => false,
-                    };
-                    if is_ctrl_combo || is_ctrl_char {
-                        let exit_match = match key_event.code {
-                            KeyCode::Char('c')
-                            | KeyCode::Char('C')
-                            | KeyCode::Char('d')
-                            | KeyCode::Char('D') => true,
-                            KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}' => true,
-                            _ => false,
-                        };
-                        if exit_match {
-                            // Exit without selection (return empty result)
-                            print!("\x1b[2J\x1b[H");
-                            stdout.flush().unwrap();
-                            // Restore terminal settings (alt screen if used)
-                            // Mouse capture not enabled; nothing to disable here
-                            if use_alt_screen {
-                                print!("\x1b[?1049l");
-                            }
-                            print!("\x1b[?7h\x1b[?25h");
-                            stdout.flush().ok();
-                            let _ = terminal::disable_raw_mode();
-                            return Vec::new();
-                        }
-                    }
-
-                    match key_event.code {
-                        // Navigation keys
-                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                            clear_pending_delete(&mut last_action_message);
-                            // Move selection up
-                            current_selection = current_selection.saturating_sub(1);
-                        }
-                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                            clear_pending_delete(&mut last_action_message);
-                            // Move selection down
-                            if !filtered_indices.is_empty()
-                                && current_selection < filtered_indices.len() - 1
-                            {
-                                current_selection += 1;
-                            }
-                        }
-                        // Ctrl-p / Ctrl-n
-                        KeyCode::Char('p') if is_ctrl_combo => {
-                            clear_pending_delete(&mut last_action_message);
-                            current_selection = current_selection.saturating_sub(1);
-                        }
-                        KeyCode::Char('n') if is_ctrl_combo => {
-                            clear_pending_delete(&mut last_action_message);
-                            if !filtered_indices.is_empty()
-                                && current_selection < filtered_indices.len() - 1
-                            {
-                                current_selection += 1;
-                            }
-                        }
-                        // PageDown / Ctrl-f, PageUp / Ctrl-b
-                        KeyCode::PageDown | KeyCode::Char('f') if is_ctrl_combo => {
-                            clear_pending_delete(&mut last_action_message);
-                            if !filtered_indices.is_empty() {
-                                let viewport = if let Some(mv) = max_viewport {
-                                    mv.max(3)
-                                } else {
-                                    let (_c, r) = crossterm::terminal::size().unwrap_or((80, 24));
-                                    let mut v = r as usize;
-                                    v = v.saturating_sub(6);
-                                    if v < 5 {
-                                        v = 5;
-                                    }
-                                    v
-                                };
-                                let max_idx = filtered_indices.len().saturating_sub(1);
-                                current_selection = (current_selection + viewport).min(max_idx);
-                            }
-                        }
-                        KeyCode::PageUp | KeyCode::Char('b') if is_ctrl_combo => {
-                            clear_pending_delete(&mut last_action_message);
-                            if !filtered_indices.is_empty() {
-                                let viewport = if let Some(mv) = max_viewport {
-                                    mv.max(3)
-                                } else {
-                                    let (_c, r) = crossterm::terminal::size().unwrap_or((80, 24));
-                                    let mut v = r as usize;
-                                    v = v.saturating_sub(6);
-                                    if v < 5 {
-                                        v = 5;
-                                    }
-                                    v
-                                };
-                                current_selection = current_selection.saturating_sub(viewport);
-                            }
-                        }
-                        // Home/End and Ctrl-a / Ctrl-e
-                        KeyCode::Home | KeyCode::Char('a') if is_ctrl_combo => {
-                            current_selection = 0;
-                        }
-                        KeyCode::End | KeyCode::Char('e') if is_ctrl_combo => {
-                            if !filtered_indices.is_empty() {
-                                current_selection = filtered_indices.len() - 1;
-                            }
-                        }
-                        // Control keys
-                        KeyCode::Enter => {
-                            // Simple behavior: if two items are selected, execute immediately
-                            if selected_ids.len() == 2 {
-                                // Exit TUI and return the two selected records regardless of cursor position
-                                print!("\x1b[2J\x1b[H");
-                                stdout.flush().unwrap();
-                                if use_alt_screen {
-                                    print!("\x1b[?1049l");
-                                }
-                                print!("\x1b[?7h\x1b[?25h");
-                                stdout.flush().ok();
-                                terminal::disable_raw_mode().unwrap();
-
-                                let mut result = Vec::new();
-                                for sid in &selected_ids {
-                                    if let Some(exec) =
-                                        current_execs.iter().find(|e| &e.record.record_id == sid)
-                                    {
-                                        result.push(exec.clone());
-                                    }
-                                }
-                                result.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
-                                return result;
-                            }
-
-                            // Otherwise, treat Enter as a toggle/select on the current line
-                            if filtered_indices.is_empty() {
-                                continue;
-                            }
-                            let oi = filtered_indices[current_selection];
-                            let ex = &display_executions[oi];
-                            let record_id = &ex.record.record_id;
-
-                            if selected_ids.iter().any(|id| id == record_id) {
-                                // Already selected and not yet two items selected: no-op
-                            } else if selected_ids.len() >= 2 {
-                                // Should not happen due to early return, but keep message for safety
-                                last_action_message = Some(i18n.t("selection_limit_reached"));
-                            } else {
-                                selected_ids.push(record_id.clone());
-                                if selected_ids.len() == 2 {
-                                    last_action_message = Some(i18n.t("selection_complete"));
-                                } else {
-                                    last_action_message = None;
-                                }
-                            }
-                        }
-                        // Tab: toggle mark; BackTab: toggle and move down one
-                        KeyCode::Tab | KeyCode::BackTab => {
-                            let step_down = matches!(key_event.code, KeyCode::BackTab);
-                            toggle_selection(step_down);
-                        }
-                        KeyCode::Char(' ') => {
-                            toggle_selection(false);
-                        }
-                        KeyCode::Esc => {
-                            // Exit and return default selection
-                            // Clear screen and move cursor to top
-                            print!("\x1b[2J\x1b[H");
-                            stdout.flush().unwrap();
-                            // Restore terminal settings
-                            if use_alt_screen {
-                                print!("\x1b[?1049l");
-                            }
-                            print!("\x1b[?7h\x1b[?25h");
-                            stdout.flush().ok();
-                            terminal::disable_raw_mode().unwrap();
-                            if on_escape_return_empty {
-                                return Vec::new();
-                            } else {
-                                return executions.iter().take(2).cloned().collect();
-                            }
-                        }
-                        // Clear/kill editing bindings
-                        KeyCode::Char('u') if is_ctrl_combo => {
-                            filter_input.clear();
-                            current_selection = 0;
-                            scroll_offset = 0;
-                            current_execs = loader();
-                            display_executions = current_execs.iter().collect();
-                        }
-                        KeyCode::Char('w') if is_ctrl_combo => {
-                            while filter_input.ends_with(char::is_whitespace) {
-                                filter_input.pop();
-                            }
-                            while !filter_input.is_empty()
-                                && !filter_input.ends_with(char::is_whitespace)
-                            {
-                                filter_input.pop();
-                            }
-                            current_selection = 0;
-                            scroll_offset = 0;
-                            current_execs = loader();
-                            display_executions = current_execs.iter().collect();
-                        }
-                        _ if Self::is_shift_backspace_event(&key_event) => {
-                            if delete_action.is_none() {
-                                clear_pending_delete(&mut last_action_message);
-                                filter_input.pop();
-                                current_selection = 0;
-                                scroll_offset = 0;
-                                current_execs = loader();
-                                display_executions = current_execs.iter().collect();
-                            } else if filtered_indices.is_empty() {
-                                clear_pending_delete(&mut last_action_message);
-                                last_action_message = Some(i18n.t("delete_nothing"));
-                            } else {
-                                let oi = filtered_indices[current_selection];
-                                let target_ref = display_executions[oi];
-                                let timestamp_display = target_ref
-                                    .record
-                                    .timestamp
-                                    .with_timezone(&chrono::Local)
-                                    .format("%Y-%m-%d %H:%M:%S")
-                                    .to_string();
-                                let record_id = target_ref.record.record_id.clone();
-                                let target_exec = (*target_ref).clone();
-
-                                if pending_delete.as_ref().map(|p| p.record.record_id.as_str())
-                                    == Some(record_id.as_str())
-                                {
-                                    if let Some(delete_fn) = delete_action.as_mut() {
-                                        match delete_fn(&target_exec) {
-                                            Ok(()) => {
-                                                selected_ids.retain(|id| id != &record_id);
-                                                pending_delete = None;
-                                                last_action_message = Some(i18n.t_format(
-                                                    "delete_success_status",
-                                                    &[&timestamp_display],
-                                                ));
-                                                current_execs = loader();
-                                                display_executions = current_execs.iter().collect();
-                                                let total_items = display_executions.len();
-                                                if total_items == 0 {
-                                                    current_selection = 0;
-                                                } else if current_selection >= total_items {
-                                                    current_selection = total_items - 1;
-                                                }
-                                                scroll_offset = 0;
-                                            }
-                                            Err(err) => {
-                                                pending_delete = Some(target_exec);
-                                                last_action_message = Some(i18n.t_format(
-                                                    "delete_failed_status",
-                                                    &[&err.to_string()],
-                                                ));
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    pending_delete = Some(target_exec);
-                                    last_action_message =
-                                        Some(i18n.t_format(
-                                            "delete_confirm_status",
-                                            &[&timestamp_display],
-                                        ));
-                                }
-                            }
-                        }
-                        // Ctrl+X behaves like Shift+Backspace (delete current record with confirm)
-                        KeyCode::Char('x') if is_ctrl_combo => {
-                            if delete_action.is_none() {
-                                clear_pending_delete(&mut last_action_message);
-                                // When deletion is not available in this screen, treat as no-op
-                            } else if filtered_indices.is_empty() {
-                                clear_pending_delete(&mut last_action_message);
-                                last_action_message = Some(i18n.t("delete_nothing"));
-                            } else {
-                                let oi = filtered_indices[current_selection];
-                                let target_ref = display_executions[oi];
-                                let timestamp_display = target_ref
-                                    .record
-                                    .timestamp
-                                    .with_timezone(&chrono::Local)
-                                    .format("%Y-%m-%d %H:%M:%S")
-                                    .to_string();
-                                let record_id = target_ref.record.record_id.clone();
-                                let target_exec = (*target_ref).clone();
-
-                                if pending_delete.as_ref().map(|p| p.record.record_id.as_str())
-                                    == Some(record_id.as_str())
-                                {
-                                    if let Some(delete_fn) = delete_action.as_mut() {
-                                        match delete_fn(&target_exec) {
-                                            Ok(()) => {
-                                                selected_ids.retain(|id| id != &record_id);
-                                                pending_delete = None;
-                                                last_action_message = Some(i18n.t_format(
-                                                    "delete_success_status",
-                                                    &[&timestamp_display],
-                                                ));
-                                                current_execs = loader();
-                                                display_executions = current_execs.iter().collect();
-                                                let total_items = display_executions.len();
-                                                if total_items == 0 {
-                                                    current_selection = 0;
-                                                } else if current_selection >= total_items {
-                                                    current_selection = total_items - 1;
-                                                }
-                                                scroll_offset = 0;
-                                            }
-                                            Err(err) => {
-                                                pending_delete = Some(target_exec);
-                                                last_action_message = Some(i18n.t_format(
-                                                    "delete_failed_status",
-                                                    &[&err.to_string()],
-                                                ));
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    pending_delete = Some(target_exec);
-                                    last_action_message =
-                                        Some(i18n.t_format(
-                                            "delete_confirm_status",
-                                            &[&timestamp_display],
-                                        ));
-                                }
-                            }
-                        }
-                        _ if Self::is_backspace_event(&key_event) => {
-                            clear_pending_delete(&mut last_action_message);
-                            filter_input.pop();
-                            current_selection = 0;
-                            scroll_offset = 0;
-                            current_execs = loader();
-                            display_executions = current_execs.iter().collect();
-                        }
-                        KeyCode::Delete => {
-                            // Clear filter input and reset view
-                            filter_input.clear();
-                            current_selection = 0;
-                            scroll_offset = 0;
-                            // Reload dataset on input
-                            current_execs = loader();
-                            display_executions = current_execs.iter().collect();
-                        }
-                        KeyCode::Left
-                        | KeyCode::Right
-                        | KeyCode::Char('o')
-                        | KeyCode::Char('O') => {
-                            preview_target = preview_target.toggle();
-                        }
-                        // Character input
-                        KeyCode::Char(c) => {
-                            // Add character to filter input and reset view
-                            filter_input.push(c);
-                            current_selection = 0;
-                            scroll_offset = 0;
-                            // Reload dataset on input
-                            current_execs = loader();
-                            display_executions = current_execs.iter().collect();
-                        }
-                        _ => {}
-                    }
-                }
-
-                Event::Resize(_, _) => { /* next loop will re-render with new size */ }
-                Event::FocusGained | Event::FocusLost => { /* ignore */ }
-                Event::Paste(_) => { /* ignore */ }
-                Event::Mouse(_) => { /* ignore */ }
-            }
-        }
-    }
-    */
 
     fn simple_select_executions(
         executions: &[CommandExecution],
