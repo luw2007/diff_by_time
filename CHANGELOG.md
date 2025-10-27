@@ -1,4 +1,8 @@
 # Changelog
+## 0.1.8 — 2025-10-27
+- fix(run): stream stdout/stderr live during execution while still recording outputs for diffs
+- chore: skip duplicated stdout/stderr display when streaming is enabled
+
 ## 0.1.7 — 2025-09-22
 - fix(tui): arrow keys in preview return focus to the list while modifier keys keep fine-grained scrolling
 - feat(keys): Enter toggles selection from preview and runs the diff automatically once two items are chosen

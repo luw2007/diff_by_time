@@ -180,12 +180,12 @@ fn main() -> Result<()> {
                 execution.record.duration_ms.to_string().green()
             );
 
-            if !execution.stdout.is_empty() {
+            if !execution.stdout.is_empty() && !execution.streamed_stdout {
                 println!("{}", i18n.t("stdout").cyan().bold());
                 println!("{}", execution.stdout);
             }
 
-            if !execution.stderr.is_empty() {
+            if !execution.stderr.is_empty() && !execution.streamed_stderr {
                 println!("{}", i18n.t("stderr").red().bold());
                 println!("{}", execution.stderr.red());
             }

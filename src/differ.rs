@@ -457,274 +457,274 @@ impl Differ {
         }
         let _ = terminal::disable_raw_mode();
         res
-    }    /*
-    fn interactive_select_command_string(
-        groups: &[CommandGroup],
-        i18n: &I18n,
-        use_alt_screen: bool,
-        max_viewport: Option<usize>,
-    ) -> Option<String> {
-        if terminal::enable_raw_mode().is_err() {
-            return None;
-        }
-        let mut stdout = io::stdout();
-        if use_alt_screen {
-            print!("\x1b[?1049h");
-        }
-        print!("\x1b[?7l\x1b[?25l");
-        stdout.flush().ok();
+    } /*
+      fn interactive_select_command_string(
+          groups: &[CommandGroup],
+          i18n: &I18n,
+          use_alt_screen: bool,
+          max_viewport: Option<usize>,
+      ) -> Option<String> {
+          if terminal::enable_raw_mode().is_err() {
+              return None;
+          }
+          let mut stdout = io::stdout();
+          if use_alt_screen {
+              print!("\x1b[?1049h");
+          }
+          print!("\x1b[?7l\x1b[?25l");
+          stdout.flush().ok();
 
-        let mut filter_input = String::new();
-        let mut current_selection = 0usize;
-        let mut scroll_offset = 0usize;
-        let fuzzy = SkimMatcher::new();
+          let mut filter_input = String::new();
+          let mut current_selection = 0usize;
+          let mut scroll_offset = 0usize;
+          let fuzzy = SkimMatcher::new();
 
-        loop {
-            print!("\x1b[2J\x1b[H");
-            // Enforce minimum terminal size before rendering UI
-            let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-            if cols < MIN_TERMINAL_COLS || rows < MIN_TERMINAL_ROWS {
-                let warn = i18n.t_format(
-                    "terminal_too_small",
-                    &[
-                        &MIN_TERMINAL_COLS.to_string(),
-                        &MIN_TERMINAL_ROWS.to_string(),
-                        &cols.to_string(),
-                        &rows.to_string(),
-                    ],
-                );
-                print!("{}\r\n", warn);
-                stdout.flush().ok();
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                continue;
-            }
-            print!("{}\r\n", i18n.t("select_clean_command"));
-            // Terminal width for prompt truncation
-            let (cols, _rows) = crossterm::terminal::size().unwrap_or((80, 24));
-            let prompt =
-                Self::truncate_for_column(&i18n.t("interactive_filter"), cols as usize - 2);
-            print!("{}: ", prompt);
-            print!("{}\r\n\r\n", filter_input);
+          loop {
+              print!("\x1b[2J\x1b[H");
+              // Enforce minimum terminal size before rendering UI
+              let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+              if cols < MIN_TERMINAL_COLS || rows < MIN_TERMINAL_ROWS {
+                  let warn = i18n.t_format(
+                      "terminal_too_small",
+                      &[
+                          &MIN_TERMINAL_COLS.to_string(),
+                          &MIN_TERMINAL_ROWS.to_string(),
+                          &cols.to_string(),
+                          &rows.to_string(),
+                      ],
+                  );
+                  print!("{}\r\n", warn);
+                  stdout.flush().ok();
+                  std::thread::sleep(std::time::Duration::from_millis(300));
+                  continue;
+              }
+              print!("{}\r\n", i18n.t("select_clean_command"));
+              // Terminal width for prompt truncation
+              let (cols, _rows) = crossterm::terminal::size().unwrap_or((80, 24));
+              let prompt =
+                  Self::truncate_for_column(&i18n.t("interactive_filter"), cols as usize - 2);
+              print!("{}: ", prompt);
+              print!("{}\r\n\r\n", filter_input);
 
-            let items: Vec<(usize, String)> = groups
-                .iter()
-                .enumerate()
-                .map(|(i, g)| {
-                    let dt = g
-                        .latest
-                        .with_timezone(&chrono::Local)
-                        .format("%Y-%m-%d %H:%M:%S")
-                        .to_string();
-                    let text = format!("{} {} {} {}", g.command, g.count, dt, i + 1);
-                    (i, text)
-                })
-                .collect();
-            let filtered_indices: Vec<usize> = if filter_input.is_empty() {
-                (0..groups.len()).collect()
-            } else {
-                let matched = fuzzy.match_and_sort(&filter_input, items);
-                matched.into_iter().map(|(i, _, _)| i).collect()
-            };
+              let items: Vec<(usize, String)> = groups
+                  .iter()
+                  .enumerate()
+                  .map(|(i, g)| {
+                      let dt = g
+                          .latest
+                          .with_timezone(&chrono::Local)
+                          .format("%Y-%m-%d %H:%M:%S")
+                          .to_string();
+                      let text = format!("{} {} {} {}", g.command, g.count, dt, i + 1);
+                      (i, text)
+                  })
+                  .collect();
+              let filtered_indices: Vec<usize> = if filter_input.is_empty() {
+                  (0..groups.len()).collect()
+              } else {
+                  let matched = fuzzy.match_and_sort(&filter_input, items);
+                  matched.into_iter().map(|(i, _, _)| i).collect()
+              };
 
-            if filtered_indices.is_empty() {
-                print!("\x1b[31m{}\x1b[0m\r\n", i18n.t("no_matches"));
-            } else {
-                if current_selection >= filtered_indices.len() {
-                    current_selection = filtered_indices.len().saturating_sub(1);
-                }
-                let viewport = if let Some(v) = max_viewport {
-                    v.max(3)
-                } else {
-                    let (_cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-                    let reserved = 6usize;
-                    let mut v = rows as usize;
-                    v = v.saturating_sub(reserved);
-                    if v < 5 {
-                        v = 5;
-                    }
-                    v
-                };
-                if current_selection < scroll_offset {
-                    scroll_offset = current_selection;
-                } else if current_selection >= scroll_offset + viewport {
-                    scroll_offset = current_selection + 1 - viewport;
-                }
-                let end = (scroll_offset + viewport).min(filtered_indices.len());
-                for (list_idx, gi_ref) in filtered_indices
-                    .iter()
-                    .enumerate()
-                    .skip(scroll_offset)
-                    .take(end - scroll_offset)
-                {
-                    let gi = *gi_ref;
-                    let g = &groups[gi];
-                    let dt = g
-                        .latest
-                        .with_timezone(&chrono::Local)
-                        .format("%Y-%m-%d %H:%M:%S");
-                    let line = format!(
-                        "{}: {} ({}: {}, {}: {})",
-                        gi + 1,
-                        g.command,
-                        i18n.t("count_label"),
-                        g.count,
-                        i18n.t("latest_label"),
-                        dt
-                    );
-                    if list_idx == current_selection {
-                        print!("\x1b[44;37m{}\x1b[0m\x1b[K\r\n", line);
-                    } else {
-                        print!("{}\x1b[K\r\n", line);
-                    }
-                }
-            }
+              if filtered_indices.is_empty() {
+                  print!("\x1b[31m{}\x1b[0m\r\n", i18n.t("no_matches"));
+              } else {
+                  if current_selection >= filtered_indices.len() {
+                      current_selection = filtered_indices.len().saturating_sub(1);
+                  }
+                  let viewport = if let Some(v) = max_viewport {
+                      v.max(3)
+                  } else {
+                      let (_cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                      let reserved = 6usize;
+                      let mut v = rows as usize;
+                      v = v.saturating_sub(reserved);
+                      if v < 5 {
+                          v = 5;
+                      }
+                      v
+                  };
+                  if current_selection < scroll_offset {
+                      scroll_offset = current_selection;
+                  } else if current_selection >= scroll_offset + viewport {
+                      scroll_offset = current_selection + 1 - viewport;
+                  }
+                  let end = (scroll_offset + viewport).min(filtered_indices.len());
+                  for (list_idx, gi_ref) in filtered_indices
+                      .iter()
+                      .enumerate()
+                      .skip(scroll_offset)
+                      .take(end - scroll_offset)
+                  {
+                      let gi = *gi_ref;
+                      let g = &groups[gi];
+                      let dt = g
+                          .latest
+                          .with_timezone(&chrono::Local)
+                          .format("%Y-%m-%d %H:%M:%S");
+                      let line = format!(
+                          "{}: {} ({}: {}, {}: {})",
+                          gi + 1,
+                          g.command,
+                          i18n.t("count_label"),
+                          g.count,
+                          i18n.t("latest_label"),
+                          dt
+                      );
+                      if list_idx == current_selection {
+                          print!("\x1b[44;37m{}\x1b[0m\x1b[K\r\n", line);
+                      } else {
+                          print!("{}\x1b[K\r\n", line);
+                      }
+                  }
+              }
 
-            print!("\r\n");
-            let hint = Self::truncate_for_column(&i18n.t("navigate_hint"), cols as usize);
-            print!("\x1b[90m{}\x1b[0m\r\n", hint);
-            stdout.flush().ok();
+              print!("\r\n");
+              let hint = Self::truncate_for_column(&i18n.t("navigate_hint"), cols as usize);
+              print!("\x1b[90m{}\x1b[0m\r\n", hint);
+              stdout.flush().ok();
 
-            if let Ok(Event::Key(key)) = event::read() {
-                let is_ctrl_combo = key.modifiers.contains(KeyModifiers::CONTROL);
-                let is_ctrl_char =
-                    matches!(key.code, KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}');
-                if is_ctrl_combo || is_ctrl_char {
-                    let exit_match = match key.code {
-                        KeyCode::Char('c')
-                        | KeyCode::Char('C')
-                        | KeyCode::Char('d')
-                        | KeyCode::Char('D') => true,
-                        KeyCode::Char(cc) if cc == '\u{3}' || cc == '\u{4}' => true,
-                        _ => false,
-                    };
-                    if exit_match {
-                        if use_alt_screen {
-                            print!("\x1b[?1049l");
-                        }
-                        print!("\x1b[?7h\x1b[?25h");
-                        stdout.flush().ok();
-                        let _ = terminal::disable_raw_mode();
-                        return None;
-                    }
-                }
-                match key.code {
-                    // Up/Down and vi-keys
-                    KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                        current_selection = current_selection.saturating_sub(1);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                        if !filtered_indices.is_empty()
-                            && current_selection < filtered_indices.len() - 1
-                        {
-                            current_selection += 1;
-                        }
-                    }
-                    // Ctrl-p / Ctrl-n
-                    KeyCode::Char('p') if is_ctrl_combo => {
-                        current_selection = current_selection.saturating_sub(1);
-                    }
-                    KeyCode::Char('n') if is_ctrl_combo => {
-                        if !filtered_indices.is_empty()
-                            && current_selection < filtered_indices.len() - 1
-                        {
-                            current_selection += 1;
-                        }
-                    }
-                    // PageDown / Ctrl-f, PageUp / Ctrl-b
-                    KeyCode::PageDown | KeyCode::Char('f') if is_ctrl_combo => {
-                        if !filtered_indices.is_empty() {
-                            let (_cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-                            let reserved = 6usize;
-                            let mut viewport = rows as usize;
-                            viewport = viewport.saturating_sub(reserved);
-                            if viewport < 5 {
-                                viewport = 5;
-                            }
-                            let max_idx = filtered_indices.len().saturating_sub(1);
-                            current_selection = (current_selection + viewport).min(max_idx);
-                        }
-                    }
-                    KeyCode::PageUp | KeyCode::Char('b') if is_ctrl_combo => {
-                        if !filtered_indices.is_empty() {
-                            let (_cols, rows) = terminal::size().unwrap_or((80, 24));
-                            let reserved = 6usize;
-                            let mut viewport = rows as usize;
-                            viewport = viewport.saturating_sub(reserved);
-                            if viewport < 5 {
-                                viewport = 5;
-                            }
-                            current_selection = current_selection.saturating_sub(viewport);
-                        }
-                    }
-                    // Home/End and Ctrl-a / Ctrl-e
-                    KeyCode::Home | KeyCode::Char('a') if is_ctrl_combo => {
-                        current_selection = 0;
-                    }
-                    KeyCode::End | KeyCode::Char('e') if is_ctrl_combo => {
-                        if !filtered_indices.is_empty() {
-                            current_selection = filtered_indices.len() - 1;
-                        }
-                    }
-                    KeyCode::Enter => {
-                        if !filtered_indices.is_empty() {
-                            let gi = filtered_indices[current_selection];
-                            if use_alt_screen {
-                                print!("\x1b[?1049l");
-                            }
-                            print!("\x1b[?7h\x1b[?25h");
-                            stdout.flush().ok();
-                            let _ = terminal::disable_raw_mode();
-                            return Some(groups[gi].command.clone());
-                        }
-                    }
-                    // Clear query / delete word / delete to end
-                    KeyCode::Char('u') if is_ctrl_combo => {
-                        filter_input.clear();
-                        current_selection = 0;
-                        scroll_offset = 0;
-                    }
-                    KeyCode::Char('w') if is_ctrl_combo => {
-                        while filter_input.ends_with(char::is_whitespace) {
-                            filter_input.pop();
-                        }
-                        while !filter_input.is_empty()
-                            && !filter_input.ends_with(char::is_whitespace)
-                        {
-                            filter_input.pop();
-                        }
-                        current_selection = 0;
-                        scroll_offset = 0;
-                    }
-                    _ if Self::is_backspace_event(&key) => {
-                        filter_input.pop();
-                        current_selection = 0;
-                        scroll_offset = 0;
-                    }
-                    KeyCode::Delete => {
-                        filter_input.clear();
-                        current_selection = 0;
-                        scroll_offset = 0;
-                    }
-                    KeyCode::Esc => {
-                        if use_alt_screen {
-                            print!("\x1b[?1049l");
-                        }
-                        print!("\x1b[?7h\x1b[?25h");
-                        stdout.flush().ok();
-                        let _ = terminal::disable_raw_mode();
-                        return None;
-                    }
-                    KeyCode::Char(c) => {
-                        filter_input.push(c);
-                        current_selection = 0;
-                        scroll_offset = 0;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    */
+              if let Ok(Event::Key(key)) = event::read() {
+                  let is_ctrl_combo = key.modifiers.contains(KeyModifiers::CONTROL);
+                  let is_ctrl_char =
+                      matches!(key.code, KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}');
+                  if is_ctrl_combo || is_ctrl_char {
+                      let exit_match = match key.code {
+                          KeyCode::Char('c')
+                          | KeyCode::Char('C')
+                          | KeyCode::Char('d')
+                          | KeyCode::Char('D') => true,
+                          KeyCode::Char(cc) if cc == '\u{3}' || cc == '\u{4}' => true,
+                          _ => false,
+                      };
+                      if exit_match {
+                          if use_alt_screen {
+                              print!("\x1b[?1049l");
+                          }
+                          print!("\x1b[?7h\x1b[?25h");
+                          stdout.flush().ok();
+                          let _ = terminal::disable_raw_mode();
+                          return None;
+                      }
+                  }
+                  match key.code {
+                      // Up/Down and vi-keys
+                      KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
+                          current_selection = current_selection.saturating_sub(1);
+                      }
+                      KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
+                          if !filtered_indices.is_empty()
+                              && current_selection < filtered_indices.len() - 1
+                          {
+                              current_selection += 1;
+                          }
+                      }
+                      // Ctrl-p / Ctrl-n
+                      KeyCode::Char('p') if is_ctrl_combo => {
+                          current_selection = current_selection.saturating_sub(1);
+                      }
+                      KeyCode::Char('n') if is_ctrl_combo => {
+                          if !filtered_indices.is_empty()
+                              && current_selection < filtered_indices.len() - 1
+                          {
+                              current_selection += 1;
+                          }
+                      }
+                      // PageDown / Ctrl-f, PageUp / Ctrl-b
+                      KeyCode::PageDown | KeyCode::Char('f') if is_ctrl_combo => {
+                          if !filtered_indices.is_empty() {
+                              let (_cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                              let reserved = 6usize;
+                              let mut viewport = rows as usize;
+                              viewport = viewport.saturating_sub(reserved);
+                              if viewport < 5 {
+                                  viewport = 5;
+                              }
+                              let max_idx = filtered_indices.len().saturating_sub(1);
+                              current_selection = (current_selection + viewport).min(max_idx);
+                          }
+                      }
+                      KeyCode::PageUp | KeyCode::Char('b') if is_ctrl_combo => {
+                          if !filtered_indices.is_empty() {
+                              let (_cols, rows) = terminal::size().unwrap_or((80, 24));
+                              let reserved = 6usize;
+                              let mut viewport = rows as usize;
+                              viewport = viewport.saturating_sub(reserved);
+                              if viewport < 5 {
+                                  viewport = 5;
+                              }
+                              current_selection = current_selection.saturating_sub(viewport);
+                          }
+                      }
+                      // Home/End and Ctrl-a / Ctrl-e
+                      KeyCode::Home | KeyCode::Char('a') if is_ctrl_combo => {
+                          current_selection = 0;
+                      }
+                      KeyCode::End | KeyCode::Char('e') if is_ctrl_combo => {
+                          if !filtered_indices.is_empty() {
+                              current_selection = filtered_indices.len() - 1;
+                          }
+                      }
+                      KeyCode::Enter => {
+                          if !filtered_indices.is_empty() {
+                              let gi = filtered_indices[current_selection];
+                              if use_alt_screen {
+                                  print!("\x1b[?1049l");
+                              }
+                              print!("\x1b[?7h\x1b[?25h");
+                              stdout.flush().ok();
+                              let _ = terminal::disable_raw_mode();
+                              return Some(groups[gi].command.clone());
+                          }
+                      }
+                      // Clear query / delete word / delete to end
+                      KeyCode::Char('u') if is_ctrl_combo => {
+                          filter_input.clear();
+                          current_selection = 0;
+                          scroll_offset = 0;
+                      }
+                      KeyCode::Char('w') if is_ctrl_combo => {
+                          while filter_input.ends_with(char::is_whitespace) {
+                              filter_input.pop();
+                          }
+                          while !filter_input.is_empty()
+                              && !filter_input.ends_with(char::is_whitespace)
+                          {
+                              filter_input.pop();
+                          }
+                          current_selection = 0;
+                          scroll_offset = 0;
+                      }
+                      _ if Self::is_backspace_event(&key) => {
+                          filter_input.pop();
+                          current_selection = 0;
+                          scroll_offset = 0;
+                      }
+                      KeyCode::Delete => {
+                          filter_input.clear();
+                          current_selection = 0;
+                          scroll_offset = 0;
+                      }
+                      KeyCode::Esc => {
+                          if use_alt_screen {
+                              print!("\x1b[?1049l");
+                          }
+                          print!("\x1b[?7h\x1b[?25h");
+                          stdout.flush().ok();
+                          let _ = terminal::disable_raw_mode();
+                          return None;
+                      }
+                      KeyCode::Char(c) => {
+                          filter_input.push(c);
+                          current_selection = 0;
+                          scroll_offset = 0;
+                      }
+                      _ => {}
+                  }
+              }
+          }
+      }
+      */
 
     pub fn select_file_for_clean(
         files: &[std::path::PathBuf],

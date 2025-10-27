@@ -1,43 +1,58 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/` Rust 2021 sources: `main.rs` (CLI via clap), `executor.rs` (run commands), `differ.rs` (diff + TUI), `store_manager.rs`/`storage.rs` (persistence under `~/.dt`), `config.rs` (TOML config), `i18n.rs` (EN/ZH strings), `fuzzy_matcher.rs` (Skim‑like matching, no fzf dep).
-- `package/` packaging scripts and templates; `package.sh` builds distributables and generates usage/docs.
-- `target/` Cargo build output. Runtime data lives in `~/.dt/`.
-- Ad‑hoc helpers: `test_package.sh`, `test_interactive.rs`, `test_hash.rs` (may be pruned over time).
+
+- **Source code**: `src/` - Core application modules including main CLI logic, TUI, storage, and command execution
+- **Binary entry**: `src/main.rs` - Main application entry point with command parsing
+- **Documentation**: `docs/` - Contains VHS tapes for demo GIF generation
+- **Packaging**: `package/` - Scripts and templates for Homebrew formula generation
+- **Build artifacts**: `target/` - Rust build outputs (gitignored)
+- **Configuration**: `~/.dt/` - Runtime data storage and configuration files
 
 ## Build, Test, and Development Commands
-```bash
-cargo build            # Debug build
-cargo build --release  # Optimized binary
-cargo run -- run "ls | head -5"   # Execute and record
-cargo run -- diff "ls | head -5"  # Diff past executions
-cargo run -- list --no-merge       # List records
-cargo test             # Run unit tests
-cargo fmt --all        # Format
-cargo clippy -- -D warnings  # Lint as errors
-./package.sh && ./test_package.sh  # Package + quick verify
-```
+
+- `cargo build` - Build debug binary
+- `cargo build --release` - Build optimized release binary
+- `cargo test` - Run all tests
+- `cargo fmt --all -- --check` - Check code formatting
+- `cargo clippy -- -D warnings` - Lint code with clippy
+- `./package.sh` - Create distributable packages with binaries and docs
+- `make gallery` - Generate demo GIFs from VHS tapes in `docs/vhs/`
 
 ## Coding Style & Naming Conventions
-- Rust 2021; 4‑space indentation; run `cargo fmt` before pushing.
-- Prefer `anyhow::Result` for fallible functions; avoid `unwrap()` in non‑test code.
-- Naming: modules/files `snake_case`; types `PascalCase`; functions/vars `snake_case`; CLI flags kebab‑case (e.g., `--no-merge`).
-- Localization: update EN and ZH entries in `src/i18n.rs` together. Comments must be English.
+
+- **Language**: Rust 2021 edition
+- **Indentation**: 4 spaces
+- **Naming conventions**:
+  - Modules and files: `snake_case`
+  - Types and structs: `PascalCase`
+  - Functions and variables: `snake_case`
+- **Error handling**: Use `anyhow::Result` for error propagation, avoid `unwrap()` in non-test code
+- **Documentation**: Comments in English, maintain i18n strings for Chinese/English support
+- **Architecture**: Follow SOLID principles and domain-driven design patterns
 
 ## Testing Guidelines
-- Unit tests live beside code under `#[cfg(test)]`; name tests `test_*`.
-- Focus on pure logic (diffing, matching, formatting); TUI flows require a TTY—skip/guard in CI.
-- Aim to cover command normalization, hashing, date‑filter parsing, and diff edge cases.
+
+- **Framework**: Built-in Rust `cargo test`
+- **Test location**: Integration tests in project root, unit tests within modules
+- **Coverage**: Ensure comprehensive coverage for core functionality
+- **Test naming**: Use descriptive names following Rust conventions
+- **Test data**: Use temporary directories and clean up after tests
 
 ## Commit & Pull Request Guidelines
-- Use Conventional Commits (e.g., `feat:`, `fix:`, `docs:`). Keep messages concise and scoped.
-- PRs must include: summary, rationale, before/after notes; link issues; screenshots/GIFs for TUI changes.
-- Required checks: `cargo fmt`, `cargo clippy -- -D warnings`, `cargo test`. Run packaging script for release‑related changes.
+
+- **Commit messages**: Use conventional commit format (feat:, fix:, docs:, etc.)
+- **PR requirements**:
+  - Clear description of changes
+  - Link to relevant issues when applicable
+  - Pass all CI checks (format, clippy, tests)
+  - Update documentation for new features
+- **Branch naming**: Use feature/ or fix/ prefixes
+- **Review process**: At least one approval required for merging
 
 ## Security & Configuration Tips
-- Commands execute via `sh -c`; never pass untrusted input automatically. Document risky examples in tests.
-- Data directory: `~/.dt/` (index + records). Config: `~/.dt/config.toml`. Env: `DT_TUI`, `DT_ALT_SCREEN`.
-- Packaging generates third‑party notices via `cargo-about` or `cargo-license`; install them locally if missing.
-- Status: not production‑ready; interfaces may change quickly—see README for current caveats.
 
+- **Command execution**: Commands run via `sh -c` - never pass untrusted input
+- **Data storage**: Runtime data stored in `~/.dt/` with configurable retention
+- **Environment isolation**: Use `--data-dir` for testing/demo environments
+- **Configuration**: Override display settings via environment variables (`DT_TUI`, `DT_ALT_SCREEN`)

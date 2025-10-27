@@ -199,6 +199,8 @@ impl StoreManager {
             stderr,
             stdout_path: Some(stdout_path),
             stderr_path: Some(stderr_path),
+            streamed_stdout: false,
+            streamed_stderr: false,
         })
     }
 

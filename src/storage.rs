@@ -22,4 +22,8 @@ pub struct CommandExecution {
     pub stderr: String,               // Standard error output
     pub stdout_path: Option<PathBuf>, // Stored stdout file path
     pub stderr_path: Option<PathBuf>, // Stored stderr file path
+    #[serde(skip)]
+    pub streamed_stdout: bool, // Indicates stdout was streamed live during execution
+    #[serde(skip)]
+    pub streamed_stderr: bool, // Indicates stderr was streamed live during execution
 }
