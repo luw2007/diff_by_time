@@ -114,7 +114,7 @@ DT_ALT_SCREEN=1              # use alt screen in interactive mode (prefer 1)
   - Press `o` or `←/→` to toggle stdout/stderr
 - Bottom status bar summarizes keys; press `h` or `?` for an overlay of preview shortcuts
 - Fuzzy filter: type to filter; substring/prefix/number priority plus skim‑style fuzzy fallback
-- Navigation: `j/k` or arrow keys; paging: `Space`/`f` down, `b`/`Backspace` up; `PgUp/PgDn`; half pages: `d`/`u`; top/bottom: `g/G`, `Home/End`
+- Navigation: `j/k` or arrow keys; paging: `PgUp/PgDn` or `Ctrl+f`/`Ctrl+b` (selection list), `Space`/`f` down, `b`/`Backspace` up (preview); half pages: `d`/`u`; top/bottom: `g/G`, `Home/End`
 - Selection: `Space`/`Enter` toggle the focused item (also works in preview); `Tab` enters preview; arrow keys in preview jump back to the list; once two items are selected, `Enter` runs the diff immediately
 - Back/quit from preview: `q`; quit app: `Q`; global `Esc` backs/exits
 

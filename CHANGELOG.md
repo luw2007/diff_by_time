@@ -1,4 +1,14 @@
 # Changelog
+## 0.1.9 — 2025-12-03
+- feat(navigation): improve paging in Selection focus with dynamic page sizing based on terminal height
+- feat(keys): add Ctrl+f/Ctrl+b shortcuts for page down/up in Selection focus (vim/emacs style)
+- feat(ui): responsive status bar that adapts to terminal width (narrow/medium/wide modes)
+- feat(help): add help overlay (h/?) for Selection focus, matching Preview's help system
+- fix(ui): update status bar and navigation hints to show new paging shortcuts (EN/ZH)
+- fix(ui): adjust responsive breakpoints to prevent truncation on 141-column terminals
+- chore: fix clippy warnings (too_many_arguments, useless_vec)
+- docs: update README and CLAUDE.md with improved navigation key documentation
+
 ## 0.1.8 — 2025-10-27
 - fix(run): stream stdout/stderr live during execution while still recording outputs for diffs
 - chore: skip duplicated stdout/stderr display when streaming is enabled

@@ -40,6 +40,21 @@ struct CommandGroup {
 // legacy preview enums removed in ratatui rewrite
 
 impl Differ {
+    /// Get navigation hint based on terminal width for responsive UI
+    fn get_nav_hint_by_width(width: u16, i18n: &I18n) -> String {
+        if width < 90 {
+            // Narrow screen: show only core shortcuts (~65 chars)
+            i18n.t("status_nav_narrow")
+        } else if width < 165 {
+            // Medium screen: show key features (~95 chars)
+            // 165 = 145 (full hint) + 20 (status + separators buffer)
+            i18n.t("status_nav_medium")
+        } else {
+            // Wide screen: show full hints (~145 chars)
+            i18n.t("status_nav_compact")
+        }
+    }
+
     /// Sanitize text for safe TUI preview rendering:
     /// - Strip ANSI escape sequences (CSI/SGR common forms)
     /// - Convert carriage return `\r` to newline to preserve progress updates
@@ -125,6 +140,7 @@ impl Differ {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_delete_request<F, D>(
         delete_action: &mut Option<D>,
         loader: &mut F,
@@ -198,6 +214,7 @@ impl Differ {
         false
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_shift_backspace<F, D>(
         delete_action: &mut Option<D>,
         loader: &mut F,
@@ -1682,11 +1699,11 @@ impl Differ {
                                     &mut pending_delete,
                                     &mut last_action_message,
                                 );
-                                if current_selection >= 10 {
-                                    current_selection -= 10;
-                                } else {
-                                    current_selection = 0;
-                                }
+                                let page_size = terminal
+                                    .size()
+                                    .map(|r| r.height.saturating_sub(6) as usize)
+                                    .unwrap_or(10);
+                                current_selection = current_selection.saturating_sub(page_size);
                                 preview_offset = 0;
                                 needs_redraw = true;
                             }
@@ -1696,11 +1713,46 @@ impl Differ {
                                     &mut last_action_message,
                                 );
                                 if !filtered_indices.is_empty() {
+                                    let page_size = terminal
+                                        .size()
+                                        .map(|r| r.height.saturating_sub(6) as usize)
+                                        .unwrap_or(10);
                                     let max_index = filtered_indices.len() - 1;
-                                    current_selection = (current_selection + 10).min(max_index);
+                                    current_selection =
+                                        (current_selection + page_size).min(max_index);
                                     preview_offset = 0;
                                     needs_redraw = true;
                                 }
+                            }
+                            KeyCode::Char('f') if ctrl => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                if !filtered_indices.is_empty() {
+                                    let page_size = terminal
+                                        .size()
+                                        .map(|r| r.height.saturating_sub(6) as usize)
+                                        .unwrap_or(10);
+                                    let max_index = filtered_indices.len() - 1;
+                                    current_selection =
+                                        (current_selection + page_size).min(max_index);
+                                    preview_offset = 0;
+                                    needs_redraw = true;
+                                }
+                            }
+                            KeyCode::Char('b') if ctrl => {
+                                Self::clear_delete_state(
+                                    &mut pending_delete,
+                                    &mut last_action_message,
+                                );
+                                let page_size = terminal
+                                    .size()
+                                    .map(|r| r.height.saturating_sub(6) as usize)
+                                    .unwrap_or(10);
+                                current_selection = current_selection.saturating_sub(page_size);
+                                preview_offset = 0;
+                                needs_redraw = true;
                             }
                             KeyCode::Home | KeyCode::Char('a') if ctrl => {
                                 Self::clear_delete_state(
@@ -1845,6 +1897,10 @@ impl Differ {
                                 current_selection = 0;
                                 preview_offset = 0;
                                 last_action_message = None;
+                                needs_redraw = true;
+                            }
+                            KeyCode::Char('?') | KeyCode::Char('h') if !ctrl && !alt => {
+                                show_help = !show_help;
                                 needs_redraw = true;
                             }
                             _ => {}
@@ -2246,8 +2302,51 @@ impl Differ {
             .viewport_content_length(inner_h);
         f.render_stateful_widget(sb, preview_area, &mut sb_state);
 
+        // Help overlay (Selection)
+        if show_help && !preview_focused {
+            // Center a popup roughly 70% width for selection help
+            let list_area = cols[0];
+            let popup = {
+                let area = list_area;
+                let w = (area.width as f32 * 0.8) as u16;
+                let h = 13u16;
+                let x = area.x + (area.width.saturating_sub(w)) / 2;
+                let y = area.y + (area.height.saturating_sub(h)) / 2;
+                ratatui::layout::Rect {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                }
+            };
+            let lines = [
+                String::new(),
+                i18n.t("selection_help_filter"),
+                i18n.t("selection_help_move"),
+                i18n.t("selection_help_page"),
+                i18n.t("selection_help_jump"),
+                i18n.t("selection_help_select"),
+                i18n.t("selection_help_preview"),
+                i18n.t("selection_help_clear"),
+                format!(
+                    "{}   {}",
+                    i18n.t("preview_help_toggle"),
+                    i18n.t("preview_help_quit")
+                ),
+            ];
+            let help_text = Paragraph::new(lines.join("\n"))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(i18n.t("selection_help_title")),
+                )
+                .wrap(Wrap { trim: false });
+            f.render_widget(Clear, popup);
+            f.render_widget(help_text, popup);
+        }
+
         // Help overlay (Preview)
-        if show_help {
+        if show_help && preview_focused {
             // Center a popup roughly 70% width, min 12 lines
             let popup = {
                 let area = preview_area;
@@ -2262,7 +2361,7 @@ impl Differ {
                     height: h,
                 }
             };
-            let lines = vec![
+            let lines = [
                 String::new(),
                 i18n.t("preview_help_move"),
                 i18n.t("preview_help_page"),
@@ -2295,7 +2394,9 @@ impl Differ {
         } else {
             i18n.t("selection_complete")
         };
-        let nav_hint = i18n.t("status_nav_compact");
+        // Use dynamic navigation hint based on terminal width
+        let terminal_width = f.size().width;
+        let nav_hint = Self::get_nav_hint_by_width(terminal_width, i18n);
         let mut footer_spans = vec![Span::raw(status)];
         if !nav_hint.is_empty() {
             footer_spans.push(Span::raw("  |  "));

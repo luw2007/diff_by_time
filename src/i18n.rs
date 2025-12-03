@@ -222,8 +222,16 @@ impl I18n {
         );
         en.insert("status_filter".to_string(), "Filter".to_string());
         en.insert(
+            "status_nav_narrow".to_string(),
+            "jk/PgUp page · Space sel · Tab→Prev · ?=help".to_string(),
+        );
+        en.insert(
+            "status_nav_medium".to_string(),
+            "jk/PgUp/^f/^b page · Space/Enter sel · Tab→Prev · Enter diff · ?=help".to_string(),
+        );
+        en.insert(
             "status_nav_compact".to_string(),
-            "Sel: type/jk, Space/Enter toggle, Tab→Preview | Prev: jk return, Shift/Ctrl+↑↓ scroll, Enter diff, q back, Q exit".to_string(),
+            "Sel: type/jk, PgUp/PgDn or ^f/^b page, Space/Enter toggle, Tab→Preview | Prev: jk return, Shift/Ctrl+↑↓ scroll, Enter diff, q back, Q exit".to_string(),
         );
         en.insert(
             "delete_confirm_status".to_string(),
@@ -254,7 +262,7 @@ impl I18n {
             "Only two records can be compared at once. Deselect one to pick another.".to_string(),
         );
         en.insert("no_matches".to_string(), "No matches found".to_string());
-        en.insert("navigate_hint".to_string(), "Navigation — Selection: type/jk, Space/Enter toggle, Tab → preview; Preview: jk return, Shift/Ctrl+↑/↓ scroll, Enter toggle/diff, Space/b/F or PgUp/PgDn page, q back, Q exit; Esc back/exit".to_string());
+        en.insert("navigate_hint".to_string(), "Navigation — Selection: type/jk, PgUp/PgDn or Ctrl+f/b page, Space/Enter toggle, Tab → preview; Preview: jk return, Shift/Ctrl+↑/↓ scroll, Enter toggle/diff, Space/b/F or PgUp/PgDn page, q back, Q exit; Esc back/exit".to_string());
         en.insert(
             "select_clean_command".to_string(),
             "Select a command to clean:".to_string(),
@@ -375,6 +383,37 @@ impl I18n {
             "Toggle help: h / ?".to_string(),
         );
         en.insert("preview_help_quit".to_string(), "Quit app: Q".to_string());
+
+        // Selection help
+        en.insert("selection_help_title".to_string(), "Selection Help".to_string());
+        en.insert(
+            "selection_help_filter".to_string(),
+            "Filter: Type to filter items (fuzzy matching)".to_string(),
+        );
+        en.insert(
+            "selection_help_move".to_string(),
+            "Move: j/k or Up/Down, Ctrl+p/Ctrl+n (emacs style)".to_string(),
+        );
+        en.insert(
+            "selection_help_page".to_string(),
+            "Page: PgUp/PgDn or Ctrl+b/Ctrl+f (dynamic based on terminal height)".to_string(),
+        );
+        en.insert(
+            "selection_help_jump".to_string(),
+            "Jump: Home/End or Ctrl+a/Ctrl+e (top/bottom)".to_string(),
+        );
+        en.insert(
+            "selection_help_select".to_string(),
+            "Select: Space or Enter to toggle (select 2 items to compare)".to_string(),
+        );
+        en.insert(
+            "selection_help_preview".to_string(),
+            "Preview: Tab to enter preview pane".to_string(),
+        );
+        en.insert(
+            "selection_help_clear".to_string(),
+            "Clear filter: Ctrl+u (clear all), Ctrl+w (delete word)".to_string(),
+        );
         en.insert("stderr_diff".to_string(), "stderr diff:".to_string());
         en.insert(
             "output_identical".to_string(),
@@ -660,8 +699,16 @@ impl I18n {
         zh.insert("status_select_second".to_string(), "选择次条".to_string());
         zh.insert("status_filter".to_string(), "筛选".to_string());
         zh.insert(
+            "status_nav_narrow".to_string(),
+            "jk/PgUp翻页 · 空格选择 · Tab→预览 · ?=帮助".to_string(),
+        );
+        zh.insert(
+            "status_nav_medium".to_string(),
+            "jk/PgUp/^f/^b翻页 · 空格/Enter选择 · Tab→预览 · Enter比较 · ?=帮助".to_string(),
+        );
+        zh.insert(
             "status_nav_compact".to_string(),
-            "选择: 输入/jk, 空格/Enter 切换, Tab 入预览 | 预览: jk 返回, Shift/Ctrl+↑↓ 逐行, Enter 比较, q 返回, Q 退出".to_string(),
+            "选择: 输入/jk, PgUp/PgDn或^f/^b翻页, 空格/Enter切换, Tab入预览 | 预览: jk返回, Shift/Ctrl+↑↓逐行, Enter比较, q返回, Q退出".to_string(),
         );
         zh.insert(
             "delete_confirm_status".to_string(),
@@ -692,7 +739,7 @@ impl I18n {
             "一次最多比较两条记录，请先取消其中一条再选择其它记录。".to_string(),
         );
         zh.insert("no_matches".to_string(), "没有找到匹配的记录".to_string());
-        zh.insert("navigate_hint".to_string(), "导航 — 选择: 输入/jk, 空格/Enter 切换, Tab → 预览；预览: jk 返回, Shift/Ctrl+↑/↓ 逐行, Enter 切换/比较, 空格/b/F 或 PgUp/PgDn 翻页, q 返回, Q 退出；Esc 返回/退出".to_string());
+        zh.insert("navigate_hint".to_string(), "导航 — 选择: 输入/jk, PgUp/PgDn或Ctrl+f/b翻页, 空格/Enter 切换, Tab → 预览；预览: jk 返回, Shift/Ctrl+↑/↓ 逐行, Enter 切换/比较, 空格/b/F 或 PgUp/PgDn 翻页, q 返回, Q 退出；Esc 返回/退出".to_string());
         zh.insert(
             "select_clean_command".to_string(),
             "选择要清理的命令:".to_string(),
@@ -810,6 +857,37 @@ impl I18n {
             "切换帮助: h / ?".to_string(),
         );
         zh.insert("preview_help_quit".to_string(), "退出程序: Q".to_string());
+
+        // Selection help (Chinese)
+        zh.insert("selection_help_title".to_string(), "选择帮助".to_string());
+        zh.insert(
+            "selection_help_filter".to_string(),
+            "筛选: 输入文字进行模糊匹配筛选".to_string(),
+        );
+        zh.insert(
+            "selection_help_move".to_string(),
+            "移动: j/k 或 上/下, Ctrl+p/Ctrl+n (emacs 风格)".to_string(),
+        );
+        zh.insert(
+            "selection_help_page".to_string(),
+            "翻页: PgUp/PgDn 或 Ctrl+b/Ctrl+f (根据终端高度动态调整)".to_string(),
+        );
+        zh.insert(
+            "selection_help_jump".to_string(),
+            "跳转: Home/End 或 Ctrl+a/Ctrl+e (跳到顶部/底部)".to_string(),
+        );
+        zh.insert(
+            "selection_help_select".to_string(),
+            "选择: 空格 或 Enter 切换选中 (选择2个项目进行比较)".to_string(),
+        );
+        zh.insert(
+            "selection_help_preview".to_string(),
+            "预览: Tab 进入预览面板".to_string(),
+        );
+        zh.insert(
+            "selection_help_clear".to_string(),
+            "清除筛选: Ctrl+u (清除全部), Ctrl+w (删除单词)".to_string(),
+        );
         zh.insert("stderr_diff".to_string(), "错误输出差异:".to_string());
         zh.insert("output_identical".to_string(), "输出完全一致".to_string());
         zh.insert(
