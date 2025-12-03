@@ -385,7 +385,10 @@ impl I18n {
         en.insert("preview_help_quit".to_string(), "Quit app: Q".to_string());
 
         // Selection help
-        en.insert("selection_help_title".to_string(), "Selection Help".to_string());
+        en.insert(
+            "selection_help_title".to_string(),
+            "Selection Help".to_string(),
+        );
         en.insert(
             "selection_help_filter".to_string(),
             "Filter: Type to filter items (fuzzy matching)".to_string(),
