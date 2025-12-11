@@ -3,7 +3,7 @@ use crate::i18n::I18n;
 use crate::storage::CommandExecution;
 use crate::store_manager::StoreManager;
 use anyhow::Result;
-use chrono::{DateTime, Datelike};
+use chrono::{DateTime, Datelike, Local};
 use colored::*;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
@@ -1813,6 +1813,10 @@ impl Differ {
                                     needs_redraw = true;
                                 }
                             }
+                            KeyCode::Char('?') if !ctrl && !alt => {
+                                show_help = !show_help;
+                                needs_redraw = true;
+                            }
                             KeyCode::Char(c) if !ctrl && !alt => {
                                 Self::clear_delete_state(
                                     &mut pending_delete,
@@ -1897,10 +1901,6 @@ impl Differ {
                                 current_selection = 0;
                                 preview_offset = 0;
                                 last_action_message = None;
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('?') | KeyCode::Char('h') if !ctrl && !alt => {
-                                show_help = !show_help;
                                 needs_redraw = true;
                             }
                             _ => {}
@@ -2005,7 +2005,7 @@ impl Differ {
                                 preview_offset = u16::MAX;
                                 needs_redraw = true;
                             }
-                            KeyCode::Char('?') | KeyCode::Char('h') if !ctrl => {
+                            KeyCode::Char('?') if !ctrl => {
                                 show_help = !show_help;
                                 needs_redraw = true;
                             }
@@ -2751,6 +2751,83 @@ impl Differ {
             12 => "dec",
             _ => "unknown",
         }
+    }
+
+    /// Automatically diff current execution against a target (first/last) execution.
+    /// Outputs colored diff directly to stdout without TUI interaction.
+    pub fn auto_diff(
+        current: &CommandExecution,
+        target: &CommandExecution,
+        target_type: crate::DiffTarget,
+    ) -> Result<()> {
+        let target_time = target.record.timestamp.with_timezone(&Local);
+        println!();
+        println!(
+            "{}",
+            format!(
+                "━━━ Comparing with {} run ({}) ━━━",
+                target_type,
+                target_time.format("%Y-%m-%d %H:%M:%S")
+            )
+            .bold()
+            .cyan()
+        );
+        println!();
+
+        // Show exit code comparison
+        if target.record.exit_code != current.record.exit_code {
+            println!(
+                "{}: {} → {}",
+                "Exit code changed".yellow(),
+                target.record.exit_code.to_string().red(),
+                current.record.exit_code.to_string().green()
+            );
+        } else {
+            println!(
+                "{}: {}",
+                "Exit code unchanged".dimmed(),
+                current.record.exit_code
+            );
+        }
+
+        // Show duration comparison
+        let duration_change = current.record.duration_ms as i64 - target.record.duration_ms as i64;
+        let duration_pct = if target.record.duration_ms > 0 {
+            (duration_change as f64 / target.record.duration_ms as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let duration_str = format!(
+            "{}: {}ms → {}ms ({:+}ms, {:+.1}%)",
+            "Duration".dimmed(),
+            target.record.duration_ms,
+            current.record.duration_ms,
+            duration_change,
+            duration_pct
+        );
+        println!("{}", duration_str);
+        println!();
+
+        // Diff stdout
+        if target.stdout == current.stdout {
+            println!("{}", "✓ stdout identical".green());
+        } else {
+            println!("{}", "stdout diff:".yellow().bold());
+            print!("{}", Self::diff_text(&target.stdout, &current.stdout));
+        }
+        println!();
+
+        // Diff stderr
+        if target.stderr == current.stderr {
+            println!("{}", "✓ stderr identical".green());
+        } else {
+            println!("{}", "stderr diff:".red().bold());
+            print!("{}", Self::diff_text(&target.stderr, &current.stderr));
+        }
+        println!();
+
+        Ok(())
     }
 }
 

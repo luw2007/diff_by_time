@@ -29,7 +29,10 @@ Generated previews:
 `dt run <COMMAND>`
 - Executes the command (via `sh -c`) and records stdout, stderr, exit code, duration, and metadata.
 - Options:
-  - `-d, --diff-code <CODE>`: After recording, immediately show a diff with the specified short code.
+  - `-d, --diff-with <TARGET>`: After recording, immediately show a diff. TARGET can be:
+    - `first`: Compare with the earliest execution
+    - `last`: Compare with the most recent execution
+    - `<CODE>`: Compare with a specific short code (e.g., `a`, `b`, `ab`)
 
 ### Shell tip: handle commands with pipes
 

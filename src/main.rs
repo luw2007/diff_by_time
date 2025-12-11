@@ -8,11 +8,13 @@ mod storage;
 mod store_manager;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use colored::*;
 use sha2::{Digest, Sha256};
+use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use config::Config;
 use differ::Differ;
@@ -21,6 +23,45 @@ use i18n::I18n;
 use std::fs;
 use storage::CommandExecution;
 use store_manager::StoreManager;
+
+/// Represents the target execution to compare against after running a command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffTarget {
+    /// Compare with the earliest (first) execution.
+    First,
+    /// Compare with the most recent (last) execution.
+    Last,
+}
+
+impl DiffTarget {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::First => "first",
+            Self::Last => "last",
+        }
+    }
+}
+
+impl fmt::Display for DiffTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for DiffTarget {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_lowercase().as_str() {
+            "first" => Ok(Self::First),
+            "last" => Ok(Self::Last),
+            other => Err(format!(
+                "Invalid diff target '{}'. Supported: 'first', 'last'",
+                other
+            )),
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "dt")]
@@ -36,14 +77,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Execute command and record output
-    Run {
-        /// Command to execute (wrap piped expressions in quotes)
-        #[arg(required = true, trailing_var_arg = true)]
-        command: Vec<String>,
-        /// Diff with a specific short code after run
-        #[arg(long = "diff-code", short = 'd')]
-        diff_code: Option<String>,
-    },
+    Run(RunArgs),
     /// Compare command output differences
     Diff {
         /// Command to compare (wrap commands with pipes in quotes)
@@ -103,6 +137,19 @@ enum CleanMode {
     All,
 }
 
+/// Arguments for the Run command.
+#[derive(Args)]
+struct RunArgs {
+    /// Command to execute (wrap piped expressions in quotes)
+    #[arg(required = true, trailing_var_arg = true)]
+    command: Vec<String>,
+
+    /// Diff with 'first', 'last', or a specific short code after run
+    /// Examples: -d first, -d last, -d a, -d ab
+    #[arg(long = "diff-with", short = 'd')]
+    diff_with: Option<String>,
+}
+
 fn main() -> Result<()> {
     // First try to parse arguments to check if it's a help request
     let args: Vec<String> = std::env::args().collect();
@@ -157,9 +204,29 @@ fn main() -> Result<()> {
         StoreManager::new_with_config_and_base_dir(config.clone(), &i18n, cli.data_dir.clone())?;
 
     match cli.command {
-        Commands::Run { command, diff_code } => {
+        Commands::Run(run_args) => {
+            let RunArgs { command, diff_with } = run_args;
+
             let command_str = join_args_for_shell(&command);
             let command_hash = hash_command(&command_str);
+
+            // Parse diff_with to determine if it's a target (first/last) or a short code
+            let (diff_target, diff_code) = if let Some(value) = diff_with {
+                match value.to_lowercase().as_str() {
+                    "first" => (Some(DiffTarget::First), None),
+                    "last" => (Some(DiffTarget::Last), None),
+                    _ => (None, Some(value)),
+                }
+            } else {
+                (None, None)
+            };
+
+            // Check if there are previous executions for auto-diff
+            let had_previous_runs = if diff_target.is_some() {
+                !store.get_sorted_records(&command_hash)?.is_empty()
+            } else {
+                false
+            };
 
             let mut execution = CommandExecutor::execute(&command_str, &i18n)?;
             // Assign minimal unused short code for this command
@@ -213,6 +280,27 @@ fn main() -> Result<()> {
                     }
                 } else {
                     println!("{}", i18n.t_format("diff_code_not_found", &[&code]));
+                }
+            }
+
+            // Auto-diff with first/last if requested
+            if let Some(target_flag) = diff_target {
+                if !had_previous_runs {
+                    println!(
+                        "{}",
+                        "No previous executions found for this command".yellow()
+                    );
+                } else {
+                    let exclude_timestamp =
+                        u64::try_from(execution.record.timestamp.timestamp()).unwrap_or_default();
+                    match store.get_target_record(&command_hash, target_flag, exclude_timestamp)? {
+                        Some(target_execution) => {
+                            Differ::auto_diff(&execution, &target_execution, target_flag)?;
+                        }
+                        None => {
+                            println!("{}", "Only current execution exists".yellow());
+                        }
+                    }
                 }
             }
         }
@@ -723,7 +811,7 @@ fn print_help(i18n: &I18n) {
         );
         println!(
             "{}",
-            i18n.t_format("help_tip_run_diff_code", &[&i18n.t("help_run_diff_code")])
+            i18n.t_format("help_tip_run_diff_with", &[&i18n.t("help_run_diff_with")])
         );
         println!("{}", i18n.t("help_pipeline_tip"));
         println!("{}", i18n.t("help_subcommand_more"));
@@ -797,7 +885,10 @@ fn print_help(i18n: &I18n) {
                 println!("  <COMMAND>  {}", i18n.t("help_run_command"));
                 println!();
                 println!("{}", i18n.t("help_label_options"));
-                println!("  -d, --diff-code <CODE>  {}", i18n.t("help_run_diff_code"));
+                println!(
+                    "  -d, --diff-with <TARGET>  {}",
+                    i18n.t("help_run_diff_with")
+                );
                 println!("  -h, --help  Print help");
                 println!();
                 println!("{}", i18n.t("help_pipeline_tip"));

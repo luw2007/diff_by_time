@@ -174,6 +174,83 @@ impl StoreManager {
         Ok(executions)
     }
 
+    /// Get sorted execution records by timestamp (ascending) for a given command hash.
+    /// Returns a list of (timestamp, meta_file_path) tuples.
+    pub fn get_sorted_records(&self, command_hash: &str) -> Result<Vec<(u64, PathBuf)>> {
+        let record_dir = self.base_dir.join("records").join(command_hash);
+        if !record_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut entries = Vec::new();
+        let read_dir = fs::read_dir(&record_dir).with_context(|| {
+            format!("Failed to read records directory {}", record_dir.display())
+        })?;
+
+        for entry in read_dir {
+            let entry = entry
+                .with_context(|| format!("Failed to read entry in {}", record_dir.display()))?;
+            let path = entry.path();
+
+            let filename = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name,
+                None => continue,
+            };
+
+            // Only process meta_*.json files
+            if !filename.starts_with("meta_") || !filename.ends_with(".json") {
+                continue;
+            }
+
+            // Extract timestamp from filename (meta_<timestamp>.json)
+            if let Some(ts_str) = filename
+                .strip_prefix("meta_")
+                .and_then(|s| s.strip_suffix(".json"))
+            {
+                if let Ok(ts) = ts_str.parse::<u64>() {
+                    entries.push((ts, path));
+                }
+            }
+        }
+
+        entries.sort_by_key(|(ts, _)| *ts);
+        Ok(entries)
+    }
+
+    /// Get a specific target execution (first or last) for a command, excluding a given timestamp.
+    /// This is used for auto-diff after running a command.
+    pub fn get_target_record(
+        &self,
+        command_hash: &str,
+        target: crate::DiffTarget,
+        exclude_timestamp: u64,
+    ) -> Result<Option<CommandExecution>> {
+        let records = self.get_sorted_records(command_hash)?;
+
+        // Filter out the current execution
+        let candidates: Vec<(u64, PathBuf)> = records
+            .into_iter()
+            .filter(|(ts, _)| *ts != exclude_timestamp)
+            .collect();
+
+        // Select first or last based on target
+        let selected = match target {
+            crate::DiffTarget::First => candidates.first().cloned(),
+            crate::DiffTarget::Last => candidates.last().cloned(),
+        };
+
+        if let Some((_, path)) = selected {
+            let lang = self.config.get_effective_language();
+            let i18n = crate::i18n::I18n::new(&lang);
+            let execution = self
+                .load_execution_from_meta(&path, &i18n)
+                .with_context(|| format!("Failed to load execution from {}", path.display()))?;
+            Ok(Some(execution))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn load_execution_from_meta(
         &self,
         meta_path: &Path,

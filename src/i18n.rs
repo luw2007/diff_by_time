@@ -25,8 +25,8 @@ impl I18n {
             "Command and arguments to execute (quote piped expressions)".to_string(),
         );
         en.insert(
-            "help_run_diff_code".to_string(),
-            "Show diff against an existing short code after run".to_string(),
+            "help_run_diff_with".to_string(),
+            "Diff with 'first', 'last', or a specific short code after run".to_string(),
         );
         en.insert(
             "help_diff".to_string(),
@@ -51,8 +51,8 @@ impl I18n {
         );
         // Tips
         en.insert(
-            "help_tip_run_diff_code".to_string(),
-            "Tip: dt run supports -d, --diff-code <CODE> — {0}".to_string(),
+            "help_tip_run_diff_with".to_string(),
+            "Tip: dt run supports -d, --diff-with <TARGET> — {0}".to_string(),
         );
         en.insert(
             "help_subcommand_more".to_string(),
@@ -201,7 +201,7 @@ impl I18n {
         );
         en.insert(
             "hint_diff_with_code".to_string(),
-            "Tip: run again with --diff-code={0} to compare".to_string(),
+            "Tip: run again with -d {0} to compare".to_string(),
         );
         en.insert(
             "select_command".to_string(),
@@ -380,7 +380,7 @@ impl I18n {
         );
         en.insert(
             "preview_help_toggle".to_string(),
-            "Toggle help: h / ?".to_string(),
+            "Toggle help: ?".to_string(),
         );
         en.insert("preview_help_quit".to_string(), "Quit app: Q".to_string());
 
@@ -546,8 +546,8 @@ impl I18n {
         );
         // Tips (zh)
         zh.insert(
-            "help_tip_run_diff_code".to_string(),
-            "提示：dt run 支持 -d, --diff-code <CODE> — {0}".to_string(),
+            "help_tip_run_diff_with".to_string(),
+            "提示：dt run 支持 -d, --diff-with <TARGET> — {0}".to_string(),
         );
         zh.insert(
             "help_subcommand_more".to_string(),
@@ -569,8 +569,8 @@ impl I18n {
         );
         zh.insert("help_clean".to_string(), "清理历史记录".to_string());
         zh.insert(
-            "help_run_diff_code".to_string(),
-            "执行后与指定短码进行对比".to_string(),
+            "help_run_diff_with".to_string(),
+            "运行后自动对比：'first'（最早）、'last'（最新）或指定短码".to_string(),
         );
         // removed: help_clean_mode (not used)
         zh.insert("short_code_label".to_string(), "短码".to_string());
@@ -684,7 +684,7 @@ impl I18n {
         zh.insert("assigned_short_code".to_string(), "短码: {0}".to_string());
         zh.insert(
             "hint_diff_with_code".to_string(),
-            "提示: 再次使用 --diff-code={0} 可直接比较".to_string(),
+            "提示: 再次使用 -d {0} 可直接比较".to_string(),
         );
         zh.insert(
             "select_command".to_string(),
@@ -855,10 +855,7 @@ impl I18n {
             "preview_help_start_diff".to_string(),
             "切换/对比（已选2条时）: Enter".to_string(),
         );
-        zh.insert(
-            "preview_help_toggle".to_string(),
-            "切换帮助: h / ?".to_string(),
-        );
+        zh.insert("preview_help_toggle".to_string(), "切换帮助: ?".to_string());
         zh.insert("preview_help_quit".to_string(), "退出程序: Q".to_string());
 
         // Selection help (Chinese)
