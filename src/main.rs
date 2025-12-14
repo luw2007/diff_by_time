@@ -113,6 +113,8 @@ enum Commands {
         #[arg(long = "json")]
         json: bool,
     },
+    /// Rebuild index (default: last year's records)
+    Rebuild,
 }
 
 #[derive(Subcommand)]
@@ -389,6 +391,11 @@ fn main() -> Result<()> {
                 ast_outline(&ast, 0, &mut outline);
                 print!("{}", outline);
             }
+        }
+        Commands::Rebuild => {
+            println!("{}", i18n.t("rebuild_start").cyan());
+            store.rebuild_index_public(&i18n)?;
+            println!("{}", i18n.t("rebuild_success").green());
         }
         Commands::Clean { mode } => {
             // Global flag for this invocation: if user typed ALL once, skip further confirms
@@ -805,6 +812,7 @@ fn print_help(i18n: &I18n) {
         println!("  {}     {}", "ls".green(), i18n.t("help_ls"));
         println!("  {}  {}", "clean".green(), i18n.t("help_clean"));
         println!("  {}   {}", "parse".green(), i18n.t("help_parse"));
+        println!("  {} {}", "rebuild".green(), i18n.t("help_rebuild"));
         println!(
             "  {}   Print this message or the help of the given subcommand(s)",
             "help".green()
@@ -937,6 +945,14 @@ fn print_help(i18n: &I18n) {
                 println!("  {}     {}", "all".green(), i18n.t("help_clean_all"));
                 println!();
                 println!("Options:");
+                println!("  -h, --help  Print help");
+            }
+            "rebuild" => {
+                println!("{}", i18n.t("help_rebuild"));
+                println!();
+                println!("{} dt rebuild", i18n.t("help_label_usage"));
+                println!();
+                println!("{}", i18n.t("help_label_options"));
                 println!("  -h, --help  Print help");
             }
             _ => {

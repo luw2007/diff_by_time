@@ -115,6 +115,15 @@ impl I18n {
             "Parse a Bash snippet/file to AST (tree-sitter-bash)".to_string(),
         );
         en.insert(
+            "help_rebuild".to_string(),
+            "Rebuild index from records (default: last year's data)".to_string(),
+        );
+        en.insert("rebuild_start".to_string(), "Rebuilding index...".to_string());
+        en.insert(
+            "rebuild_success".to_string(),
+            "Index rebuilt successfully".to_string(),
+        );
+        en.insert(
             "help_parse_file".to_string(),
             "File path to parse; omit to read from STDIN".to_string(),
         );
@@ -906,6 +915,15 @@ impl I18n {
         zh.insert(
             "help_parse".to_string(),
             "解析 Bash 片段/文件为 AST（基于 tree-sitter-bash）".to_string(),
+        );
+        zh.insert(
+            "help_rebuild".to_string(),
+            "从记录重建索引（默认：最近一年数据）".to_string(),
+        );
+        zh.insert("rebuild_start".to_string(), "正在重建索引...".to_string());
+        zh.insert(
+            "rebuild_success".to_string(),
+            "索引重建成功".to_string(),
         );
         zh.insert(
             "help_parse_file".to_string(),

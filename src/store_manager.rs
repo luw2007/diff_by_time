@@ -553,7 +553,22 @@ impl StoreManager {
         Ok(())
     }
 
+    /// Public method to rebuild index (default: last year's records)
+    pub fn rebuild_index_public(&self, i18n: &crate::i18n::I18n) -> Result<()> {
+        self.rebuild_index_since(Some(Utc::now() - Duration::days(365)), i18n)
+    }
+
+    /// Internal method to rebuild full index (used by clean operations)
     fn rebuild_index(&self, i18n: &crate::i18n::I18n) -> Result<()> {
+        self.rebuild_index_since(None, i18n)
+    }
+
+    /// Rebuild index with optional time filter
+    fn rebuild_index_since(
+        &self,
+        since: Option<chrono::DateTime<Utc>>,
+        i18n: &crate::i18n::I18n,
+    ) -> Result<()> {
         let records_dir = self.base_dir.join("records");
         let mut all_records = Vec::new();
 
@@ -578,7 +593,14 @@ impl StoreManager {
                             if let Ok(record) =
                                 serde_json::from_reader::<_, CommandRecord>(fs::File::open(&path)?)
                             {
-                                all_records.push(record);
+                                // Apply time filter if specified
+                                if let Some(cutoff) = since {
+                                    if record.timestamp >= cutoff {
+                                        all_records.push(record);
+                                    }
+                                } else {
+                                    all_records.push(record);
+                                }
                             }
                         }
                     }
