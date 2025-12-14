@@ -33,6 +33,14 @@ impl I18n {
             "Compare command output differences".to_string(),
         );
         en.insert(
+            "help_show".to_string(),
+            "Show stdout/stderr of a selected execution".to_string(),
+        );
+        en.insert(
+            "help_show_command".to_string(),
+            "Command and arguments to show (quote piped expressions)".to_string(),
+        );
+        en.insert(
             "help_diff_command".to_string(),
             "Command and arguments to compare (quote piped expressions)".to_string(),
         );
@@ -115,21 +123,24 @@ impl I18n {
             "Parse a Bash snippet/file to AST (tree-sitter-bash)".to_string(),
         );
         en.insert(
-            "help_rebuild".to_string(),
-            "Rebuild index from records (default: last year's data)".to_string(),
-        );
-        en.insert("rebuild_start".to_string(), "Rebuilding index...".to_string());
-        en.insert(
-            "rebuild_success".to_string(),
-            "Index rebuilt successfully".to_string(),
-        );
-        en.insert(
             "help_parse_file".to_string(),
             "File path to parse; omit to read from STDIN".to_string(),
         );
         en.insert(
             "help_parse_json".to_string(),
             "Output JSON instead of outline".to_string(),
+        );
+        en.insert(
+            "help_rebuild".to_string(),
+            "Rebuild index (default: last year's records)".to_string(),
+        );
+        en.insert(
+            "rebuild_start".to_string(),
+            "Rebuilding index from last year's records...".to_string(),
+        );
+        en.insert(
+            "rebuild_success".to_string(),
+            "Index rebuilt successfully!".to_string(),
         );
         // Dangerous command confirmations
         en.insert(
@@ -183,6 +194,14 @@ impl I18n {
         en.insert("execution_time".to_string(), "Execution time".to_string());
         en.insert("stdout".to_string(), "Standard output:".to_string());
         en.insert("stderr".to_string(), "Error output:".to_string());
+        en.insert(
+            "show_stdout_header".to_string(),
+            "=== STDOUT ===".to_string(),
+        );
+        en.insert(
+            "show_stderr_header".to_string(),
+            "=== STDERR ===".to_string(),
+        );
         en.insert("result_saved".to_string(), "Result saved".to_string());
         en.insert(
             "need_at_least_two".to_string(),
@@ -197,12 +216,24 @@ impl I18n {
             "Found {0} execution records, please select two to compare:".to_string(),
         );
         en.insert(
+            "select_execution".to_string(),
+            "Found {0} execution records, please select one to show:".to_string(),
+        );
+        en.insert(
             "input_numbers".to_string(),
             "Input two numbers (space separated, e.g., 1 2):".to_string(),
         );
         en.insert(
+            "input_number".to_string(),
+            "Input a number (e.g., 1):".to_string(),
+        );
+        en.insert(
             "invalid_input".to_string(),
             "Invalid input, will use the latest two records".to_string(),
+        );
+        en.insert(
+            "invalid_input_single".to_string(),
+            "Invalid input, will use the latest record".to_string(),
         );
         en.insert(
             "assigned_short_code".to_string(),
@@ -229,18 +260,38 @@ impl I18n {
             "status_select_second".to_string(),
             "Select second".to_string(),
         );
+        en.insert(
+            "status_select_record".to_string(),
+            "Select record".to_string(),
+        );
+        en.insert(
+            "status_show_confirm".to_string(),
+            "Press Enter to show".to_string(),
+        );
         en.insert("status_filter".to_string(), "Filter".to_string());
         en.insert(
             "status_nav_narrow".to_string(),
             "jk/PgUp page · Space sel · Tab→Prev · ?=help".to_string(),
         );
         en.insert(
+            "status_nav_narrow_show".to_string(),
+            "jk/PgUp page · Enter show · Tab→Prev · ?=help".to_string(),
+        );
+        en.insert(
             "status_nav_medium".to_string(),
             "jk/PgUp/^f/^b page · Space/Enter sel · Tab→Prev · Enter diff · ?=help".to_string(),
         );
         en.insert(
+            "status_nav_medium_show".to_string(),
+            "jk/PgUp/^f/^b page · Enter show · Tab→Prev · ?=help".to_string(),
+        );
+        en.insert(
             "status_nav_compact".to_string(),
             "Sel: type/jk, PgUp/PgDn or ^f/^b page, Space/Enter toggle, Tab→Preview | Prev: jk return, Shift/Ctrl+↑↓ scroll, Enter diff, q back, Q exit".to_string(),
+        );
+        en.insert(
+            "status_nav_compact_show".to_string(),
+            "Sel: type/jk, PgUp/PgDn or ^f/^b page, Enter show, Tab→Preview | Prev: jk return, Shift/Ctrl+↑↓ scroll, Enter show, q back, Q exit".to_string(),
         );
         en.insert(
             "delete_confirm_status".to_string(),
@@ -267,11 +318,20 @@ impl I18n {
             "Selected two records. Press Enter again to compare.".to_string(),
         );
         en.insert(
+            "selection_complete_show".to_string(),
+            "Selected. Press Enter to show.".to_string(),
+        );
+        en.insert(
             "selection_limit_reached".to_string(),
             "Only two records can be compared at once. Deselect one to pick another.".to_string(),
         );
+        en.insert(
+            "selection_limit_reached_single".to_string(),
+            "Only one record can be selected at once.".to_string(),
+        );
         en.insert("no_matches".to_string(), "No matches found".to_string());
         en.insert("navigate_hint".to_string(), "Navigation — Selection: type/jk, PgUp/PgDn or Ctrl+f/b page, Space/Enter toggle, Tab → preview; Preview: jk return, Shift/Ctrl+↑/↓ scroll, Enter toggle/diff, Space/b/F or PgUp/PgDn page, q back, Q exit; Esc back/exit".to_string());
+        en.insert("navigate_hint_filter_list".to_string(), "Navigation — ↑/↓ or j/k, Ctrl+p/n; PgUp/PgDn or Ctrl+f/b; Home/End or Ctrl+a/e; Filter: type, Backspace delete, Ctrl+w word, Delete/Ctrl+u clear; Enter confirm, Esc/Ctrl+c/d cancel".to_string());
         en.insert(
             "select_clean_command".to_string(),
             "Select a command to clean:".to_string(),
@@ -537,6 +597,14 @@ impl I18n {
         );
         zh.insert("help_diff".to_string(), "比较命令输出差异".to_string());
         zh.insert(
+            "help_show".to_string(),
+            "交互选择一条记录并展示 stdout/stderr".to_string(),
+        );
+        zh.insert(
+            "help_show_command".to_string(),
+            "要展示的命令及其参数（包含管道/重定向时需整体加引号）".to_string(),
+        );
+        zh.insert(
             "help_diff_command".to_string(),
             "要比较的命令及其参数（包含管道时需整体加引号）".to_string(),
         );
@@ -669,6 +737,14 @@ impl I18n {
         zh.insert("execution_time".to_string(), "执行时间".to_string());
         zh.insert("stdout".to_string(), "标准输出:".to_string());
         zh.insert("stderr".to_string(), "错误输出:".to_string());
+        zh.insert(
+            "show_stdout_header".to_string(),
+            "=== 标准输出 ===".to_string(),
+        );
+        zh.insert(
+            "show_stderr_header".to_string(),
+            "=== 错误输出 ===".to_string(),
+        );
         zh.insert("result_saved".to_string(), "结果已保存".to_string());
         zh.insert(
             "need_at_least_two".to_string(),
@@ -683,12 +759,24 @@ impl I18n {
             "找到 {0} 个执行记录，请选择要比较的两个:".to_string(),
         );
         zh.insert(
+            "select_execution".to_string(),
+            "找到 {0} 条执行记录，请选择一条查看:".to_string(),
+        );
+        zh.insert(
             "input_numbers".to_string(),
             "输入两个数字 (用空格分隔，例如: 1 2):".to_string(),
         );
         zh.insert(
+            "input_number".to_string(),
+            "输入一个数字（例如: 1）:".to_string(),
+        );
+        zh.insert(
             "invalid_input".to_string(),
             "无效输入，将使用最新的两个记录".to_string(),
+        );
+        zh.insert(
+            "invalid_input_single".to_string(),
+            "无效输入，将使用最新的一条记录".to_string(),
         );
         zh.insert("assigned_short_code".to_string(), "短码: {0}".to_string());
         zh.insert(
@@ -709,18 +797,32 @@ impl I18n {
         );
         zh.insert("status_select_first".to_string(), "选择首条".to_string());
         zh.insert("status_select_second".to_string(), "选择次条".to_string());
+        zh.insert("status_select_record".to_string(), "选择记录".to_string());
+        zh.insert("status_show_confirm".to_string(), "回车查看".to_string());
         zh.insert("status_filter".to_string(), "筛选".to_string());
         zh.insert(
             "status_nav_narrow".to_string(),
             "jk/PgUp翻页 · 空格选择 · Tab→预览 · ?=帮助".to_string(),
         );
         zh.insert(
+            "status_nav_narrow_show".to_string(),
+            "jk/PgUp翻页 · 回车查看 · Tab→预览 · ?=帮助".to_string(),
+        );
+        zh.insert(
             "status_nav_medium".to_string(),
             "jk/PgUp/^f/^b翻页 · 空格/Enter选择 · Tab→预览 · Enter比较 · ?=帮助".to_string(),
         );
         zh.insert(
+            "status_nav_medium_show".to_string(),
+            "jk/PgUp/^f/^b翻页 · 回车查看 · Tab→预览 · ?=帮助".to_string(),
+        );
+        zh.insert(
             "status_nav_compact".to_string(),
             "选择: 输入/jk, PgUp/PgDn或^f/^b翻页, 空格/Enter切换, Tab入预览 | 预览: jk返回, Shift/Ctrl+↑↓逐行, Enter比较, q返回, Q退出".to_string(),
+        );
+        zh.insert(
+            "status_nav_compact_show".to_string(),
+            "选择: 输入/jk, PgUp/PgDn或^f/^b翻页, 回车查看, Tab入预览 | 预览: jk返回, Shift/Ctrl+↑↓逐行, 回车查看, q返回, Q退出".to_string(),
         );
         zh.insert(
             "delete_confirm_status".to_string(),
@@ -747,11 +849,20 @@ impl I18n {
             "已选择两条记录，再次按 Enter 立即对比。".to_string(),
         );
         zh.insert(
+            "selection_complete_show".to_string(),
+            "已选择，按 Enter 查看。".to_string(),
+        );
+        zh.insert(
             "selection_limit_reached".to_string(),
             "一次最多比较两条记录，请先取消其中一条再选择其它记录。".to_string(),
         );
+        zh.insert(
+            "selection_limit_reached_single".to_string(),
+            "一次只能选择一条记录。".to_string(),
+        );
         zh.insert("no_matches".to_string(), "没有找到匹配的记录".to_string());
         zh.insert("navigate_hint".to_string(), "导航 — 选择: 输入/jk, PgUp/PgDn或Ctrl+f/b翻页, 空格/Enter 切换, Tab → 预览；预览: jk 返回, Shift/Ctrl+↑/↓ 逐行, Enter 切换/比较, 空格/b/F 或 PgUp/PgDn 翻页, q 返回, Q 退出；Esc 返回/退出".to_string());
+        zh.insert("navigate_hint_filter_list".to_string(), "导航 — ↑/↓ 或 j/k, Ctrl+p/n；PgUp/PgDn 或 Ctrl+f/b；Home/End 或 Ctrl+a/e；过滤：输入字符，Backspace 删一字，Ctrl+w 删一词，Delete/Ctrl+u 清空；Enter 确认，Esc/Ctrl+c/d 取消".to_string());
         zh.insert(
             "select_clean_command".to_string(),
             "选择要清理的命令:".to_string(),
@@ -917,15 +1028,6 @@ impl I18n {
             "解析 Bash 片段/文件为 AST（基于 tree-sitter-bash）".to_string(),
         );
         zh.insert(
-            "help_rebuild".to_string(),
-            "从记录重建索引（默认：最近一年数据）".to_string(),
-        );
-        zh.insert("rebuild_start".to_string(), "正在重建索引...".to_string());
-        zh.insert(
-            "rebuild_success".to_string(),
-            "索引重建成功".to_string(),
-        );
-        zh.insert(
             "help_parse_file".to_string(),
             "解析的文件路径；缺省则从 STDIN 读取".to_string(),
         );
@@ -933,6 +1035,15 @@ impl I18n {
             "help_parse_json".to_string(),
             "以 JSON 输出（默认为概要树）".to_string(),
         );
+        zh.insert(
+            "help_rebuild".to_string(),
+            "重建索引（默认：最近一年的记录）".to_string(),
+        );
+        zh.insert(
+            "rebuild_start".to_string(),
+            "正在从最近一年的记录重建索引...".to_string(),
+        );
+        zh.insert("rebuild_success".to_string(), "索引重建成功！".to_string());
 
         // Error messages
         zh.insert(

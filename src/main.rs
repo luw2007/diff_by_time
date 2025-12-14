@@ -90,6 +90,12 @@ enum Commands {
         #[arg(long = "linewise")]
         linewise: bool,
     },
+    /// Show stdout/stderr of a selected execution
+    Show {
+        /// Command to show (wrap commands with pipes in quotes)
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+    },
     /// Clean history records
     Clean {
         /// Clean mode
@@ -366,6 +372,56 @@ fn main() -> Result<()> {
                     max_shown,
                     linewise,
                 )?;
+            }
+        }
+        Commands::Show { command } => {
+            // Resolve TUI settings (env overrides config if present)
+            let tui_simple = std::env::var("DT_TUI")
+                .ok()
+                .map(|v| {
+                    let v = v.to_lowercase();
+                    v == "0" || v == "false" || v == "simple"
+                })
+                .unwrap_or_else(|| config.display.tui_mode.to_lowercase() == "simple");
+            let use_alt_screen = std::env::var("DT_ALT_SCREEN")
+                .ok()
+                .map(|v| {
+                    let v = v.to_lowercase();
+                    !(v == "0" || v == "false")
+                })
+                .unwrap_or(config.display.alt_screen);
+
+            if !command.is_empty() {
+                let command_str = join_args_for_shell(&command);
+                let command_hash = hash_command(&command_str);
+                let executions = store.find_executions(&command_hash, &i18n)?;
+                if executions.is_empty() {
+                    println!("{}", i18n.t("no_records").yellow());
+                    return Ok(());
+                }
+
+                let hash_clone = command_hash.clone();
+                let store_ref = &store;
+                let selected = Differ::select_single_execution(
+                    &executions,
+                    &i18n,
+                    tui_simple,
+                    use_alt_screen,
+                    None,
+                    || {
+                        store_ref
+                            .find_executions(&hash_clone, &i18n)
+                            .unwrap_or_default()
+                    },
+                    Some(|exec: &CommandExecution| store_ref.delete_execution(exec, &i18n)),
+                );
+
+                if let Some(exec) = selected {
+                    Differ::show_execution(&exec, &i18n)?;
+                }
+            } else {
+                // No command provided: open command selector, then enter show selection flow.
+                Differ::command_then_show_flow(&store, &i18n, tui_simple, use_alt_screen)?;
             }
         }
         Commands::Ls { query, json } => {
@@ -809,6 +865,7 @@ fn print_help(i18n: &I18n) {
         println!("{}", i18n.t("help_label_commands"));
         println!("  {}    {}", "run".green(), i18n.t("help_run"));
         println!("  {}   {}", "diff".green(), i18n.t("help_diff"));
+        println!("  {}   {}", "show".green(), i18n.t("help_show"));
         println!("  {}     {}", "ls".green(), i18n.t("help_ls"));
         println!("  {}  {}", "clean".green(), i18n.t("help_clean"));
         println!("  {}   {}", "parse".green(), i18n.t("help_parse"));
@@ -922,6 +979,19 @@ fn print_help(i18n: &I18n) {
                 println!();
                 println!("{}", i18n.t("help_pipeline_tip"));
             }
+            "show" => {
+                println!("{}", i18n.t("help_show"));
+                println!();
+                println!("{} dt show [COMMAND]", i18n.t("help_label_usage"));
+                println!();
+                println!("{}", i18n.t("help_label_arguments"));
+                println!("  [COMMAND]  {}", i18n.t("help_show_command"));
+                println!();
+                println!("{}", i18n.t("help_label_options"));
+                println!("  -h, --help  Print help");
+                println!();
+                println!("{}", i18n.t("help_pipeline_tip"));
+            }
             "ls" | "list" => {
                 println!("{}", i18n.t("help_ls"));
                 println!();
@@ -945,6 +1015,18 @@ fn print_help(i18n: &I18n) {
                 println!("  {}     {}", "all".green(), i18n.t("help_clean_all"));
                 println!();
                 println!("Options:");
+                println!("  -h, --help  Print help");
+            }
+            "parse" => {
+                println!("{}", i18n.t("help_parse"));
+                println!();
+                println!("{} dt parse [FILE] [--json]", i18n.t("help_label_usage"));
+                println!();
+                println!("{}", i18n.t("help_label_arguments"));
+                println!("  [FILE]  {}", i18n.t("help_parse_file"));
+                println!();
+                println!("{}", i18n.t("help_label_options"));
+                println!("      --json  {}", i18n.t("help_parse_json"));
                 println!("  -h, --help  Print help");
             }
             "rebuild" => {

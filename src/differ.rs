@@ -22,7 +22,7 @@ use ratatui::{
 };
 use regex::Regex;
 use similar::{ChangeTag, TextDiff};
-use std::io::{self, Write};
+use std::io;
 use std::sync::OnceLock;
 use unicode_width::UnicodeWidthChar;
 
@@ -41,17 +41,30 @@ struct CommandGroup {
 
 impl Differ {
     /// Get navigation hint based on terminal width for responsive UI
-    fn get_nav_hint_by_width(width: u16, i18n: &I18n) -> String {
+    fn get_nav_hint_by_width(width: u16, i18n: &I18n, selection_goal: usize) -> String {
+        let (narrow, medium, compact) = if selection_goal == 1 {
+            (
+                "status_nav_narrow_show",
+                "status_nav_medium_show",
+                "status_nav_compact_show",
+            )
+        } else {
+            (
+                "status_nav_narrow",
+                "status_nav_medium",
+                "status_nav_compact",
+            )
+        };
         if width < 90 {
             // Narrow screen: show only core shortcuts (~65 chars)
-            i18n.t("status_nav_narrow")
+            i18n.t(narrow)
         } else if width < 165 {
             // Medium screen: show key features (~95 chars)
             // 165 = 145 (full hint) + 20 (status + separators buffer)
-            i18n.t("status_nav_medium")
+            i18n.t(medium)
         } else {
             // Wide screen: show full hints (~145 chars)
-            i18n.t("status_nav_compact")
+            i18n.t(compact)
         }
     }
 
@@ -89,6 +102,135 @@ impl Differ {
     fn is_backspace_event(key: &KeyEvent) -> bool {
         matches!(key.code, KeyCode::Backspace)
             || matches!(key.code, KeyCode::Char(c) if c as u32 == 8 || c as u32 == 127)
+    }
+
+    /// Check if the key event is a Ctrl+C or Ctrl+D exit signal
+    fn is_ctrl_exit_event(key: &KeyEvent) -> bool {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let ctrl_combo = ctrl && matches!(key.code, KeyCode::Char('c' | 'C' | 'd' | 'D'));
+        let ctrl_char = matches!(
+            key.code,
+            KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}'
+        );
+        ctrl_combo || ctrl_char
+    }
+
+    /// Delete word backwards (Ctrl+W behavior) from the filter input
+    fn delete_word_backwards(input: &mut String) {
+        // Remove trailing whitespace
+        while input.ends_with(char::is_whitespace) {
+            input.pop();
+        }
+        // Remove the last word
+        while !input.is_empty() && !input.ends_with(char::is_whitespace) {
+            input.pop();
+        }
+    }
+
+    /// Handle common list navigation keys (Up/Down, PageUp/PageDown, Home/End, etc.)
+    /// Returns true if the key was handled
+    fn handle_common_list_navigation_key(
+        key: &KeyEvent,
+        list_len: usize,
+        page_size: usize,
+        current_selection: &mut usize,
+    ) -> bool {
+        if list_len == 0 {
+            // No-op for empty list, but still consume the key
+            return matches!(
+                key.code,
+                KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+                    | KeyCode::Home
+                    | KeyCode::End
+                    | KeyCode::Char('j' | 'k')
+            );
+        }
+
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let max_idx = list_len.saturating_sub(1);
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                *current_selection = current_selection.saturating_sub(1);
+                true
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                *current_selection = (*current_selection + 1).min(max_idx);
+                true
+            }
+            KeyCode::Char('p') if ctrl => {
+                *current_selection = current_selection.saturating_sub(1);
+                true
+            }
+            KeyCode::Char('n') if ctrl => {
+                *current_selection = (*current_selection + 1).min(max_idx);
+                true
+            }
+            KeyCode::PageDown => {
+                *current_selection = (*current_selection + page_size).min(max_idx);
+                true
+            }
+            KeyCode::Char('f') if ctrl => {
+                *current_selection = (*current_selection + page_size).min(max_idx);
+                true
+            }
+            KeyCode::PageUp => {
+                *current_selection = current_selection.saturating_sub(page_size);
+                true
+            }
+            KeyCode::Char('b') if ctrl => {
+                *current_selection = current_selection.saturating_sub(page_size);
+                true
+            }
+            KeyCode::Home => {
+                *current_selection = 0;
+                true
+            }
+            KeyCode::Char('a') if ctrl => {
+                *current_selection = 0;
+                true
+            }
+            KeyCode::End => {
+                *current_selection = max_idx;
+                true
+            }
+            KeyCode::Char('e') if ctrl => {
+                *current_selection = max_idx;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Handle common filter editing keys (char input, Backspace, Delete, Ctrl+U, Ctrl+W)
+    /// Returns true if the key was handled
+    fn handle_common_filter_edit_key(key: &KeyEvent, filter_input: &mut String) -> bool {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            _ if Self::is_backspace_event(key) => {
+                filter_input.pop();
+                true
+            }
+            KeyCode::Delete => {
+                filter_input.clear();
+                true
+            }
+            KeyCode::Char('u') if ctrl => {
+                filter_input.clear();
+                true
+            }
+            KeyCode::Char('w') if ctrl => {
+                Self::delete_word_backwards(filter_input);
+                true
+            }
+            KeyCode::Char(c) if !ctrl => {
+                filter_input.push(c);
+                true
+            }
+            _ => false,
+        }
     }
 
     fn compute_filtered_indices(executions: &[CommandExecution], input: &str) -> Vec<usize> {
@@ -334,7 +476,17 @@ impl Differ {
             let _ = crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen);
         }
         let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend).ok()?;
+        let mut terminal = match Terminal::new(backend) {
+            Ok(t) => t,
+            Err(_) => {
+                let mut out = io::stdout();
+                if use_alt_screen {
+                    let _ = crossterm::execute!(out, crossterm::terminal::LeaveAlternateScreen);
+                }
+                let _ = terminal::disable_raw_mode();
+                return None;
+            }
+        };
         // Ensure we start from a clean frame even without alt-screen
         let _ = terminal.clear();
 
@@ -421,50 +573,53 @@ impl Differ {
             }
             f.render_stateful_widget(list, rows[1], &mut state);
 
-            let foot =
-                Paragraph::new(i18n.t("navigate_hint")).style(Style::default().fg(Color::Gray));
+            let foot = Paragraph::new(i18n.t("navigate_hint_filter_list"))
+                .style(Style::default().fg(Color::Gray));
             f.render_widget(foot, rows[2]);
         };
 
         let res = loop {
             let _ = terminal
                 .draw(|f| draw(f, i18n, groups, &filter_input, &filtered, current_selection));
-            match event::read().ok()? {
-                Event::Key(k) => {
-                    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-                    match k.code {
-                        KeyCode::Esc => break None,
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            current_selection = current_selection.saturating_sub(1);
+            match event::read() {
+                Ok(Event::Key(k)) => {
+                    if Self::is_ctrl_exit_event(&k) {
+                        break None;
+                    }
+                    if matches!(k.code, KeyCode::Esc) {
+                        break None;
+                    }
+
+                    let page = terminal
+                        .size()
+                        .map(|r| r.height.saturating_sub(4) as usize)
+                        .unwrap_or(10)
+                        .max(1);
+
+                    if Self::handle_common_list_navigation_key(
+                        &k,
+                        filtered.len(),
+                        page,
+                        &mut current_selection,
+                    ) {
+                        continue;
+                    }
+
+                    if Self::handle_common_filter_edit_key(&k, &mut filter_input) {
+                        filtered = compute(&filter_input);
+                        current_selection = 0;
+                        continue;
+                    }
+
+                    if matches!(k.code, KeyCode::Enter) {
+                        if let Some(&idx) = filtered.get(current_selection) {
+                            break Some(groups[idx].command.clone());
                         }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if current_selection + 1 < filtered.len() {
-                                current_selection += 1;
-                            }
-                        }
-                        KeyCode::Enter => {
-                            if let Some(&idx) = filtered.get(current_selection) {
-                                break Some(groups[idx].command.clone());
-                            }
-                        }
-                        KeyCode::Backspace | KeyCode::Delete => {
-                            filter_input.pop();
-                            filtered = compute(&filter_input);
-                            if current_selection >= filtered.len() {
-                                current_selection = filtered.len().saturating_sub(1);
-                            }
-                        }
-                        KeyCode::Char(c) if !ctrl => {
-                            filter_input.push(c);
-                            filtered = compute(&filter_input);
-                            current_selection = 0;
-                        }
-                        KeyCode::Char('c') if ctrl => break None,
-                        _ => {}
                     }
                 }
-                Event::Resize(_, _) => {}
-                _ => {}
+                Ok(Event::Resize(_, _)) => {}
+                Ok(_) => {}
+                Err(_) => break None,
             }
         };
 
@@ -780,7 +935,17 @@ impl Differ {
             let _ = crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen);
         }
         let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend).ok().unwrap();
+        let mut terminal = match Terminal::new(backend) {
+            Ok(t) => t,
+            Err(_) => {
+                let mut out = io::stdout();
+                if use_alt_screen {
+                    let _ = crossterm::execute!(out, crossterm::terminal::LeaveAlternateScreen);
+                }
+                let _ = terminal::disable_raw_mode();
+                return Ok(None);
+            }
+        };
 
         let mut filter_input = String::new();
         let mut current_selection: usize = 0;
@@ -809,6 +974,8 @@ impl Differ {
                     filtered: &Vec<usize>,
                     sel: usize| {
             let root = f.size();
+            f.render_widget(Clear, root);
+
             let rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
@@ -850,8 +1017,8 @@ impl Differ {
             }
             f.render_stateful_widget(list, rows[1], &mut state);
 
-            let foot =
-                Paragraph::new(i18n.t("navigate_hint")).style(Style::default().fg(Color::Gray));
+            let foot = Paragraph::new(i18n.t("navigate_hint_filter_list"))
+                .style(Style::default().fg(Color::Gray));
             f.render_widget(foot, rows[2]);
         };
 
@@ -860,36 +1027,38 @@ impl Differ {
                 .draw(|f| draw(f, i18n, files, &filter_input, &filtered, current_selection));
             match event::read().ok() {
                 Some(Event::Key(k)) => {
-                    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-                    match k.code {
-                        KeyCode::Esc => break None,
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            current_selection = current_selection.saturating_sub(1);
+                    if Self::is_ctrl_exit_event(&k) {
+                        break None;
+                    }
+                    if matches!(k.code, KeyCode::Esc) {
+                        break None;
+                    }
+
+                    let page = terminal
+                        .size()
+                        .map(|r| r.height.saturating_sub(4) as usize)
+                        .unwrap_or(10)
+                        .max(1);
+
+                    if Self::handle_common_list_navigation_key(
+                        &k,
+                        filtered.len(),
+                        page,
+                        &mut current_selection,
+                    ) {
+                        continue;
+                    }
+
+                    if Self::handle_common_filter_edit_key(&k, &mut filter_input) {
+                        filtered = compute(&filter_input);
+                        current_selection = 0;
+                        continue;
+                    }
+
+                    if matches!(k.code, KeyCode::Enter) {
+                        if let Some(&idx) = filtered.get(current_selection) {
+                            break Some(files[idx].clone());
                         }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if current_selection + 1 < filtered.len() {
-                                current_selection += 1;
-                            }
-                        }
-                        KeyCode::Enter => {
-                            if let Some(&idx) = filtered.get(current_selection) {
-                                break Some(files[idx].clone());
-                            }
-                        }
-                        KeyCode::Backspace | KeyCode::Delete => {
-                            filter_input.pop();
-                            filtered = compute(&filter_input);
-                            if current_selection >= filtered.len() {
-                                current_selection = filtered.len().saturating_sub(1);
-                            }
-                        }
-                        KeyCode::Char(c) if !ctrl => {
-                            filter_input.push(c);
-                            filtered = compute(&filter_input);
-                            current_selection = 0;
-                        }
-                        KeyCode::Char('c') if ctrl => break None,
-                        _ => {}
                     }
                 }
                 Some(Event::Resize(_, _)) => {}
@@ -959,6 +1128,7 @@ impl Differ {
                     true, // Esc returns empty => go back to command list
                     max_viewport,
                     Some(|exec: &CommandExecution| store_ref.delete_execution(exec, i18n)),
+                    2,
                 );
                 if executions.is_empty() {
                     // Go back to command list
@@ -970,6 +1140,68 @@ impl Differ {
                 print!("{}", diff_output);
             }
             return Ok(());
+        }
+    }
+
+    /// Command selector flow for show command
+    pub fn command_then_show_flow(
+        store: &StoreManager,
+        i18n: &I18n,
+        tui_simple: bool,
+        use_alt_screen: bool,
+    ) -> Result<()> {
+        // Build command groups from index
+        let records = store.get_all_records()?;
+        if records.is_empty() {
+            println!("{}", i18n.t("no_records").yellow());
+            return Ok(());
+        }
+
+        loop {
+            // Select a command group
+            let groups = Self::build_command_groups(&records);
+            let selected_hash = if tui_simple {
+                Self::simple_select_command(&groups, i18n)
+            } else {
+                Self::interactive_select_command(&groups, i18n, use_alt_screen)
+            };
+
+            let Some(command_hash) = selected_hash else {
+                return Ok(());
+            };
+
+            // Load executions for the chosen command
+            let executions = store.find_executions(&command_hash, i18n)?;
+            if executions.is_empty() {
+                println!("{}", i18n.t("no_records").yellow());
+                continue;
+            }
+
+            let selected = if tui_simple {
+                Self::simple_select_single_execution(&executions, i18n)
+            } else {
+                let store_ref = store;
+                let hash_clone = command_hash.clone();
+                Self::select_single_execution(
+                    &executions,
+                    i18n,
+                    tui_simple,
+                    use_alt_screen,
+                    None,
+                    || {
+                        store_ref
+                            .find_executions(&hash_clone, i18n)
+                            .unwrap_or_default()
+                    },
+                    Some(|exec: &CommandExecution| store_ref.delete_execution(exec, i18n)),
+                )
+            };
+
+            if let Some(exec) = selected {
+                Self::show_execution(&exec, i18n)?;
+                return Ok(());
+            }
+            // If selection was cancelled, go back to command list
         }
     }
 
@@ -1035,191 +1267,197 @@ impl Differ {
         i18n: &I18n,
         use_alt_screen: bool,
     ) -> Option<String> {
-        // Prepare terminal
         if terminal::enable_raw_mode().is_err() {
             return Self::simple_select_command(groups, i18n);
         }
         let mut stdout = io::stdout();
         if use_alt_screen {
-            print!("\x1b[?1049h");
+            let _ = crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen);
         }
-        print!("\x1b[?7l\x1b[?25l");
-        stdout.flush().ok();
+        let _ = crossterm::execute!(stdout, crossterm::cursor::Hide);
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = match Terminal::new(backend) {
+            Ok(t) => t,
+            Err(_) => {
+                let mut out = io::stdout();
+                let _ = crossterm::execute!(out, crossterm::cursor::Show);
+                if use_alt_screen {
+                    let _ = crossterm::execute!(out, crossterm::terminal::LeaveAlternateScreen);
+                }
+                let _ = terminal::disable_raw_mode();
+                return None;
+            }
+        };
+        let _ = terminal.clear();
 
         let mut filter_input = String::new();
-        let mut current_selection = 0usize;
-        let mut scroll_offset = 0usize;
+        let mut current_selection: usize = 0;
 
-        loop {
-            print!("\x1b[2J\x1b[H");
-            stdout.flush().ok();
+        let compute = |filter: &str| -> Vec<usize> {
+            if filter.is_empty() {
+                return (0..groups.len()).collect();
+            }
+            let items: Vec<(usize, String)> = groups
+                .iter()
+                .enumerate()
+                .map(|(i, g)| {
+                    let dt = g
+                        .latest
+                        .with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d %H:%M:%S");
+                    let searchable = format!("{} {} {} {}", g.command, g.count, dt, i + 1);
+                    (i, searchable)
+                })
+                .collect();
+            let m = SkimMatcher::new();
+            m.match_and_sort(filter, items)
+                .into_iter()
+                .map(|(i, _, _)| i)
+                .collect()
+        };
+        let mut filtered = compute("");
 
-            print!("{}\r\n", i18n.t("select_command"));
-            print!("{}: ", i18n.t("interactive_filter"));
-            print!("{}\r\n\r\n", filter_input);
+        let draw = |f: &mut ratatui::Frame,
+                    i18n: &I18n,
+                    groups: &[CommandGroup],
+                    filter: &str,
+                    filtered: &Vec<usize>,
+                    sel: usize| {
+            let root = f.size();
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
+                .split(root);
+            f.render_widget(Clear, root);
 
-            let fuzzy = SkimMatcher::new();
-            let filtered_indices: Vec<usize> = if filter_input.is_empty() {
-                (0..groups.len()).collect()
+            let header = Paragraph::new(Line::from(vec![
+                Span::raw(i18n.t("select_command")),
+                Span::raw("  |  "),
+                Span::raw(i18n.t("status_filter")),
+                Span::raw(": "),
+                Span::raw(filter),
+            ]));
+            f.render_widget(header, rows[0]);
+
+            let mut items: Vec<ListItem> = Vec::new();
+            if filtered.is_empty() {
+                items.push(
+                    ListItem::new(i18n.t("no_matches")).style(Style::default().fg(Color::Red)),
+                );
             } else {
-                let items: Vec<(usize, String)> = groups
-                    .iter()
-                    .enumerate()
-                    .map(|(i, g)| {
-                        let dt = g
-                            .latest
-                            .with_timezone(&chrono::Local)
-                            .format("%Y-%m-%d %H:%M:%S")
-                            .to_string();
-                        let text = format!("{} {} {} {}", g.command, g.count, dt, i + 1);
-                        (i, text)
-                    })
-                    .collect();
-                let matched = fuzzy.match_and_sort(&filter_input, items);
-                matched.into_iter().map(|(i, _, _)| i).collect()
-            };
-
-            if filtered_indices.is_empty() {
-                print!("\x1b[31m{}\x1b[0m\r\n", i18n.t("no_matches"));
-            } else {
-                if current_selection >= filtered_indices.len() {
-                    current_selection = filtered_indices.len().saturating_sub(1);
-                }
-                let (_cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-                let mut viewport = rows as usize;
-                let reserved = 6usize;
-                viewport = viewport.saturating_sub(reserved);
-                if viewport < 5 {
-                    viewport = 5;
-                }
-                if current_selection < scroll_offset {
-                    scroll_offset = current_selection;
-                } else if current_selection >= scroll_offset + viewport {
-                    scroll_offset = current_selection + 1 - viewport;
-                }
-                let end = (scroll_offset + viewport).min(filtered_indices.len());
-                for (list_idx, gi_ref) in filtered_indices
-                    .iter()
-                    .enumerate()
-                    .skip(scroll_offset)
-                    .take(end - scroll_offset)
-                {
-                    let gi = *gi_ref;
-                    let g = &groups[gi];
+                for &idx in filtered.iter() {
+                    let g = &groups[idx];
                     let dt = g
                         .latest
                         .with_timezone(&chrono::Local)
                         .format("%Y-%m-%d %H:%M:%S");
                     let line = format!(
                         "{}: {} ({}: {}, {}: {})",
-                        gi + 1,
+                        idx + 1,
                         g.command,
                         i18n.t("count_label"),
                         g.count,
                         i18n.t("latest_label"),
                         dt
                     );
-                    if list_idx == current_selection {
-                        print!("\x1b[44;37m{}\x1b[0m\x1b[K\r\n", line);
-                    } else {
-                        print!("{}\x1b[K\r\n", line);
-                    }
+                    items.push(ListItem::new(line));
                 }
             }
 
-            print!("\r\n");
-            print!("\x1b[90m{}\x1b[0m\r\n", i18n.t("navigate_hint"));
-            stdout.flush().ok();
+            let list = List::new(items)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(i18n.t("select_command")),
+                )
+                .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
+            let mut state = ratatui::widgets::ListState::default();
+            if !filtered.is_empty() {
+                state.select(Some(sel));
+            }
+            f.render_stateful_widget(list, rows[1], &mut state);
 
-            if let Ok(Event::Key(key)) = event::read() {
-                let is_ctrl_combo = key.modifiers.contains(KeyModifiers::CONTROL);
-                let is_ctrl_char =
-                    matches!(key.code, KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}');
-                if is_ctrl_combo || is_ctrl_char {
-                    let exit_match = match key.code {
-                        KeyCode::Char('c')
-                        | KeyCode::Char('C')
-                        | KeyCode::Char('d')
-                        | KeyCode::Char('D') => true,
-                        KeyCode::Char(cc) if cc == '\u{3}' || cc == '\u{4}' => true,
-                        _ => false,
-                    };
-                    if exit_match {
-                        if use_alt_screen {
-                            print!("\x1b[?1049l");
-                        }
-                        print!("\x1b[?7h\x1b[?25h");
-                        stdout.flush().ok();
-                        let _ = terminal::disable_raw_mode();
-                        return None;
+            let foot = Paragraph::new(i18n.t("navigate_hint_filter_list"))
+                .style(Style::default().fg(Color::Gray));
+            f.render_widget(foot, rows[2]);
+        };
+
+        let res = loop {
+            let _ = terminal
+                .draw(|f| draw(f, i18n, groups, &filter_input, &filtered, current_selection));
+            match event::read() {
+                Ok(Event::Key(k)) => {
+                    if Self::is_ctrl_exit_event(&k) {
+                        break None;
                     }
-                }
-                match key.code {
-                    KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                        current_selection = current_selection.saturating_sub(1);
+                    if matches!(k.code, KeyCode::Esc) {
+                        break None;
                     }
-                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                        if !filtered_indices.is_empty()
-                            && current_selection < filtered_indices.len() - 1
-                        {
-                            current_selection += 1;
-                        }
+
+                    let page = terminal
+                        .size()
+                        .map(|r| r.height.saturating_sub(4) as usize)
+                        .unwrap_or(10)
+                        .max(1);
+
+                    if Self::handle_common_list_navigation_key(
+                        &k,
+                        filtered.len(),
+                        page,
+                        &mut current_selection,
+                    ) {
+                        continue;
                     }
-                    KeyCode::Enter => {
-                        if !filtered_indices.is_empty() {
-                            // If the filter input is a pure number, allow direct selection by displayed index (gi + 1)
+
+                    if Self::handle_common_filter_edit_key(&k, &mut filter_input) {
+                        filtered = compute(&filter_input);
+                        current_selection = 0;
+                        continue;
+                    }
+
+                    match k.code {
+                        KeyCode::Enter => {
+                            if filtered.is_empty() {
+                                continue;
+                            }
+                            // Keep legacy behavior: pure number selects by original (idx + 1)
                             let trimmed = filter_input.trim();
-                            let mut pick_gi: Option<usize> = None;
+                            let mut pick_idx: Option<usize> = None;
                             if !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit()) {
                                 if let Ok(n) = trimmed.parse::<usize>() {
                                     if n > 0 {
-                                        for &gi_candidate in &filtered_indices {
-                                            if gi_candidate + 1 == n {
-                                                pick_gi = Some(gi_candidate);
+                                        for &candidate in &filtered {
+                                            if candidate + 1 == n {
+                                                pick_idx = Some(candidate);
                                                 break;
                                             }
                                         }
                                     }
                                 }
                             }
-                            let gi = pick_gi.unwrap_or_else(|| filtered_indices[current_selection]);
-                            if use_alt_screen {
-                                print!("\x1b[?1049l");
-                            }
-                            print!("\x1b[?7h\x1b[?25h");
-                            stdout.flush().ok();
-                            let _ = terminal::disable_raw_mode();
-                            return Some(groups[gi].command_hash.clone());
+                            let idx = pick_idx.unwrap_or_else(|| filtered[current_selection]);
+                            break Some(groups[idx].command_hash.clone());
                         }
+                        _ => {}
                     }
-                    _ if Self::is_backspace_event(&key) => {
-                        filter_input.pop();
-                        current_selection = 0;
-                        scroll_offset = 0;
-                    }
-                    KeyCode::Delete => {
-                        filter_input.clear();
-                        current_selection = 0;
-                        scroll_offset = 0;
-                    }
-                    KeyCode::Esc => {
-                        if use_alt_screen {
-                            print!("\x1b[?1049l");
-                        }
-                        print!("\x1b[?7h\x1b[?25h");
-                        stdout.flush().ok();
-                        let _ = terminal::disable_raw_mode();
-                        return None;
-                    }
-                    KeyCode::Char(c) => {
-                        filter_input.push(c);
-                        current_selection = 0;
-                        scroll_offset = 0;
-                    }
-                    _ => {}
                 }
+                Ok(Event::Resize(_, _)) => {}
+                Ok(_) => {}
+                Err(_) => break None,
             }
+        };
+
+        let _ = terminal.show_cursor();
+        let mut out = io::stdout();
+        if use_alt_screen {
+            let _ = crossterm::execute!(out, crossterm::terminal::LeaveAlternateScreen);
         }
+        let _ = terminal::disable_raw_mode();
+        res
     }
     pub fn diff_executions(
         executions: &[CommandExecution],
@@ -1510,6 +1748,7 @@ impl Differ {
         _on_escape_return_empty: bool,
         _max_viewport: Option<usize>,
         mut delete_action: Option<D>,
+        selection_goal: usize,
     ) -> Vec<CommandExecution>
     where
         F: FnMut() -> Vec<CommandExecution>,
@@ -1568,6 +1807,7 @@ impl Differ {
                         &current_execs,
                         &filtered_indices,
                         linewise,
+                        selection_goal,
                         matches!(focus, Focus::Preview),
                         show_help,
                         last_action_message.as_deref(),
@@ -1782,8 +2022,17 @@ impl Differ {
                                     &mut pending_delete,
                                     &mut last_action_message,
                                 );
+                                // For single selection mode, Enter immediately selects and breaks
+                                if selection_goal == 1 && matches!(key_event.code, KeyCode::Enter) {
+                                    if let Some(&oi) = filtered_indices.get(current_selection) {
+                                        selected_ids.clear();
+                                        selected_ids
+                                            .push(current_execs[oi].record.record_id.clone());
+                                    }
+                                    break;
+                                }
                                 if matches!(key_event.code, KeyCode::Enter)
-                                    && selected_ids.len() == 2
+                                    && selected_ids.len() == selection_goal
                                 {
                                     break;
                                 }
@@ -1795,17 +2044,25 @@ impl Differ {
                                         {
                                             selected_ids.remove(pos);
                                             last_action_message = None;
-                                        } else if selected_ids.len() < 2 {
+                                        } else if selected_ids.len() < selection_goal {
                                             selected_ids.push(record_id);
-                                            if selected_ids.len() == 2 {
-                                                last_action_message =
-                                                    Some(i18n.t("selection_complete"));
+                                            if selected_ids.len() == selection_goal {
+                                                let msg = if selection_goal == 1 {
+                                                    i18n.t("selection_complete_show")
+                                                } else {
+                                                    i18n.t("selection_complete")
+                                                };
+                                                last_action_message = Some(msg);
                                             } else {
                                                 last_action_message = None;
                                             }
                                         } else {
-                                            last_action_message =
-                                                Some(i18n.t("selection_limit_reached"));
+                                            let msg = if selection_goal == 1 {
+                                                i18n.t("selection_limit_reached_single")
+                                            } else {
+                                                i18n.t("selection_limit_reached")
+                                            };
+                                            last_action_message = Some(msg);
                                         }
                                     }
                                     focus = Focus::Preview;
@@ -2018,7 +2275,16 @@ impl Differ {
                                 break;
                             }
                             KeyCode::Enter => {
-                                if selected_ids.len() == 2 {
+                                // For single selection mode, Enter immediately selects and breaks
+                                if selection_goal == 1 {
+                                    if let Some(&oi) = filtered_indices.get(current_selection) {
+                                        selected_ids.clear();
+                                        selected_ids
+                                            .push(current_execs[oi].record.record_id.clone());
+                                    }
+                                    break;
+                                }
+                                if selected_ids.len() == selection_goal {
                                     break;
                                 }
                                 if let Some(&oi) = filtered_indices.get(current_selection) {
@@ -2027,7 +2293,7 @@ impl Differ {
                                         selected_ids.iter().position(|id| id == &record_id)
                                     {
                                         selected_ids.remove(pos);
-                                    } else if selected_ids.len() < 2 {
+                                    } else if selected_ids.len() < selection_goal {
                                         selected_ids.push(record_id);
                                     }
                                     needs_redraw = true;
@@ -2057,8 +2323,8 @@ impl Differ {
         }
         let _ = terminal::disable_raw_mode();
 
-        if selected_ids.len() == 2 {
-            let mut pair: Vec<CommandExecution> = selected_ids
+        if selected_ids.len() == selection_goal {
+            let mut picked: Vec<CommandExecution> = selected_ids
                 .into_iter()
                 .filter_map(|id| {
                     current_execs
@@ -2067,9 +2333,9 @@ impl Differ {
                         .cloned()
                 })
                 .collect();
-            if pair.len() == 2 {
-                pair.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
-                return pair;
+            if picked.len() == selection_goal {
+                picked.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
+                return picked;
             }
         }
         Vec::new()
@@ -2086,6 +2352,7 @@ impl Differ {
         current_execs: &[CommandExecution],
         filtered_indices: &[usize],
         linewise: bool,
+        selection_goal: usize,
         preview_focused: bool,
         show_help: bool,
         last_action: Option<&str>,
@@ -2166,7 +2433,7 @@ impl Differ {
         f.render_stateful_widget(list, cols[0], &mut state);
 
         // Right preview
-        let preview_pair = if selected_ids.len() == 2 {
+        let preview_pair = if selection_goal == 2 && selected_ids.len() == 2 {
             let mut pair: Vec<&CommandExecution> = selected_ids
                 .iter()
                 .filter_map(|id| current_execs.iter().find(|e| &e.record.record_id == id))
@@ -2387,7 +2654,13 @@ impl Differ {
         }
 
         // Footer
-        let status = if selected_ids.is_empty() {
+        let status = if selection_goal == 1 {
+            if selected_ids.is_empty() {
+                i18n.t("status_select_record")
+            } else {
+                i18n.t("status_show_confirm")
+            }
+        } else if selected_ids.is_empty() {
             i18n.t("status_select_first")
         } else if selected_ids.len() == 1 {
             i18n.t("status_select_second")
@@ -2396,7 +2669,7 @@ impl Differ {
         };
         // Use dynamic navigation hint based on terminal width
         let terminal_width = f.size().width;
-        let nav_hint = Self::get_nav_hint_by_width(terminal_width, i18n);
+        let nav_hint = Self::get_nav_hint_by_width(terminal_width, i18n, selection_goal);
         let mut footer_spans = vec![Span::raw(status)];
         if !nav_hint.is_empty() {
             footer_spans.push(Span::raw("  |  "));
@@ -2451,7 +2724,71 @@ impl Differ {
             false,
             max_viewport,
             delete_action,
+            2,
         )
+    }
+
+    /// Select a single execution interactively for show command
+    #[allow(clippy::too_many_arguments)]
+    pub fn select_single_execution<F, D>(
+        executions: &[CommandExecution],
+        i18n: &I18n,
+        tui_simple: bool,
+        use_alt_screen: bool,
+        max_viewport: Option<usize>,
+        loader: F,
+        delete_action: Option<D>,
+    ) -> Option<CommandExecution>
+    where
+        F: FnMut() -> Vec<CommandExecution>,
+        D: FnMut(&CommandExecution) -> Result<()>,
+    {
+        if tui_simple {
+            return Self::simple_select_single_execution(executions, i18n);
+        }
+        let picked = Self::start_interactive_selection_ratatui(
+            executions,
+            i18n,
+            use_alt_screen,
+            false,
+            loader,
+            false,
+            max_viewport,
+            delete_action,
+            1,
+        );
+        picked.into_iter().next()
+    }
+
+    /// Show stdout/stderr of a single execution
+    pub fn show_execution(execution: &CommandExecution, i18n: &I18n) -> Result<()> {
+        use std::fs;
+
+        let stdout = if let Some(path) = execution.stdout_path.as_ref() {
+            let bytes = fs::read(path)?;
+            String::from_utf8_lossy(&bytes).to_string()
+        } else {
+            execution.stdout.clone()
+        };
+        let stderr = if let Some(path) = execution.stderr_path.as_ref() {
+            let bytes = fs::read(path)?;
+            String::from_utf8_lossy(&bytes).to_string()
+        } else {
+            execution.stderr.clone()
+        };
+
+        println!("{}", i18n.t("show_stdout_header"));
+        print!("{}", stdout);
+        if !stdout.ends_with('\n') {
+            println!();
+        }
+        println!();
+        println!("{}", i18n.t("show_stderr_header"));
+        print!("{}", stderr);
+        if !stderr.ends_with('\n') {
+            println!();
+        }
+        Ok(())
     }
 
     fn simple_select_executions(
@@ -2526,6 +2863,62 @@ impl Differ {
 
         selected.sort_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp));
         selected
+    }
+
+    /// Simple (non-TUI) selection for single execution (show command)
+    fn simple_select_single_execution(
+        executions: &[CommandExecution],
+        i18n: &I18n,
+    ) -> Option<CommandExecution> {
+        if executions.is_empty() {
+            return None;
+        }
+        if executions.len() == 1 {
+            return Some(executions[0].clone());
+        }
+
+        println!(
+            "{}",
+            i18n.t_format("select_execution", &[&executions.len().to_string()])
+        );
+
+        for (i, exec) in executions.iter().enumerate() {
+            let local_time = exec.record.timestamp.with_timezone(&chrono::Local);
+            let date_str = local_time.format("%Y-%m-%d %H:%M:%S");
+            if let Some(code) = &exec.record.short_code {
+                println!(
+                    "{}: {}:{} {}: {}",
+                    i + 1,
+                    i18n.t("short_code_label"),
+                    code,
+                    i18n.t("time_label"),
+                    date_str,
+                );
+            } else {
+                println!("{}: {}: {}", i + 1, i18n.t("time_label"), date_str,);
+            }
+        }
+
+        println!("{}", i18n.t("input_number"));
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_err() {
+            return executions
+                .iter()
+                .max_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp))
+                .cloned();
+        }
+        let s = input.trim();
+        if let Ok(idx) = s.parse::<usize>() {
+            if idx > 0 && idx <= executions.len() {
+                return Some(executions[idx - 1].clone());
+            }
+        }
+
+        println!("{}", i18n.t("invalid_input_single"));
+        executions
+            .iter()
+            .max_by(|a, b| a.record.timestamp.cmp(&b.record.timestamp))
+            .cloned()
     }
 
     fn is_code_filter_input(input: &str, executions: &[CommandExecution]) -> Option<Vec<String>> {
@@ -2927,6 +3320,7 @@ mod test_support {
                 false,
                 None,
                 None::<fn(&CommandExecution) -> Result<()>>,
+                2,
             )
         }
     }
