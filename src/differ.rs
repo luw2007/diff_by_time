@@ -1419,30 +1419,27 @@ impl Differ {
                         continue;
                     }
 
-                    match k.code {
-                        KeyCode::Enter => {
-                            if filtered.is_empty() {
-                                continue;
-                            }
-                            // Keep legacy behavior: pure number selects by original (idx + 1)
-                            let trimmed = filter_input.trim();
-                            let mut pick_idx: Option<usize> = None;
-                            if !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit()) {
-                                if let Ok(n) = trimmed.parse::<usize>() {
-                                    if n > 0 {
-                                        for &candidate in &filtered {
-                                            if candidate + 1 == n {
-                                                pick_idx = Some(candidate);
-                                                break;
-                                            }
+                    if matches!(k.code, KeyCode::Enter) {
+                        if filtered.is_empty() {
+                            continue;
+                        }
+                        // Keep legacy behavior: pure number selects by original (idx + 1)
+                        let trimmed = filter_input.trim();
+                        let mut pick_idx: Option<usize> = None;
+                        if !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit()) {
+                            if let Ok(n) = trimmed.parse::<usize>() {
+                                if n > 0 {
+                                    for &candidate in &filtered {
+                                        if candidate + 1 == n {
+                                            pick_idx = Some(candidate);
+                                            break;
                                         }
                                     }
                                 }
                             }
-                            let idx = pick_idx.unwrap_or_else(|| filtered[current_selection]);
-                            break Some(groups[idx].command_hash.clone());
                         }
-                        _ => {}
+                        let idx = pick_idx.unwrap_or_else(|| filtered[current_selection]);
+                        break Some(groups[idx].command_hash.clone());
                     }
                 }
                 Ok(Event::Resize(_, _)) => {}
