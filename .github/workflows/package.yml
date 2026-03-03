@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  format-and-lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,26 +29,196 @@ jobs:
       - name: Tests
         run: cargo test --all --all-features --verbose
 
-      - name: Install packaging tools
+  build:
+    needs: format-and-lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install packaging tools (non-Windows)
+        if: runner.os != 'Windows'
         run: |
           cargo install cargo-about --locked || true
           cargo install cargo-license --locked || true
 
-      - name: Make packaging script executable
+      - name: Install packaging tools (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cargo install cargo-about --locked || true
+          cargo install cargo-license --locked || true
+
+      - name: Build for target
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Make packaging script executable (non-Windows)
+        if: runner.os != 'Windows'
         run: chmod +x package.sh
 
-      - name: Package
-        run: ./package.sh
-
-      - name: Quick verify packaged binary
+      - name: Package (non-Windows)
+        if: runner.os != 'Windows'
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          chmod +x test_package.sh || true
-          ./test_package.sh || true
+          # Modify package.sh to use the pre-built target binary
+          mkdir -p package
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          PACKAGE_NAME="dt-${VERSION}"
+          
+          # Create package directory structure
+          mkdir -p "package/${PACKAGE_NAME}"
+          
+          # Copy the pre-built binary
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cp "target/${{ matrix.target }}/release/dt" "package/${PACKAGE_NAME}/"
+          else
+            cp "target/${{ matrix.target }}/release/dt" "package/${PACKAGE_NAME}/"
+          fi
+          
+          # Copy docs
+          cp "README.md" "package/${PACKAGE_NAME}/" 2>/dev/null || true
+          cp "LICENSE" "package/${PACKAGE_NAME}/" 2>/dev/null || true
+          cp "THIRD_PARTY_NOTICES.md" "package/${PACKAGE_NAME}/" 2>/dev/null || true
+          
+          # Generate third-party dependency report
+          REPORT_OUT_MD="package/${PACKAGE_NAME}/THIRD_PARTY_DEPENDENCIES.md"
+          REPORT_OUT_JSON="package/${PACKAGE_NAME}/THIRD_PARTY_DEPENDENCIES.json"
+          if command -v cargo-about >/dev/null 2>&1; then
+            TEMPLATE="package/about_template.hbs"
+            CONFIG="package/about.hjson"
+            if [[ -f "$TEMPLATE" && -f "$CONFIG" ]]; then
+              cargo about generate "$CONFIG" "$TEMPLATE" --workspace -o "$REPORT_OUT_MD" >/dev/null || true
+            fi
+          elif command -v cargo-license >/dev/null 2>&1; then
+            cargo license --json > "$REPORT_OUT_JSON" || true
+          fi
+          
+          # Maintain latest symlink
+          ln -sfn "${PACKAGE_NAME}" "package/latest"
+          
+          # Create USAGE.md
+          cat > "package/${PACKAGE_NAME}/USAGE.md" << 'EOF'
+          # dt - Command Execution Time Diff Tool
+          
+          ## Installation
+          
+          1. Copy the `dt` binary to a directory in your PATH, for example:
+             ```bash
+             sudo cp dt /usr/local/bin/
+             ```
+          
+          2. Or use it directly in the current directory:
+             ```bash
+             ./dt --help
+             ```
+          
+          ## Basic Usage
+          
+          See README.md for full documentation.
+          EOF
+          
+          # Create install.sh for Unix-like systems
+          cat > "package/${PACKAGE_NAME}/install.sh" << 'EOF'
+          #!/bin/bash
+          set -e
+          BINARY_NAME="dt"
+          INSTALL_DIR="/usr/local/bin"
+          if [[ $EUID -ne 0 ]]; then
+             echo "⚠️  This script needs root to install into /usr/local/bin"
+             echo "💡 Try: sudo ./install.sh"
+             echo "💡 Or copy manually: cp dt ~/.local/bin/"
+             exit 1
+          fi
+          echo "🚀 Installing ${BINARY_NAME}..."
+          cp "${BINARY_NAME}" "${INSTALL_DIR}/"
+          chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+          echo "✅ Installed!"
+          EOF
+          chmod +x "package/${PACKAGE_NAME}/install.sh"
+          
+          # Determine archive suffix
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+              ARCH="arm64"
+            else
+              ARCH="x86_64"
+            fi
+            OS="darwin"
+          elif [ "$RUNNER_OS" = "Linux" ]; then
+            ARCH="x86_64"
+            OS="linux"
+          fi
+          
+          # Create archives
+          cd package
+          tar -czf "${PACKAGE_NAME}-${ARCH}-${OS}.tar.gz" "${PACKAGE_NAME}/"
+          cd ..
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          # Windows packaging
+          mkdir -p package
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          PACKAGE_NAME="dt-${VERSION}"
+          
+          mkdir -p "package/${PACKAGE_NAME}"
+          
+          # Copy Windows binary
+          cp "target/${{ matrix.target }}/release/dt.exe" "package/${PACKAGE_NAME}/"
+          
+          # Copy docs
+          cp "README.md" "package/${PACKAGE_NAME}/" 2>/dev/null || true
+          cp "LICENSE" "package/${PACKAGE_NAME}/" 2>/dev/null || true
+          cp "THIRD_PARTY_NOTICES.md" "package/${PACKAGE_NAME}/" 2>/dev/null || true
+          
+          # Create simple USAGE
+          cat > "package/${PACKAGE_NAME}/USAGE.md" << 'EOF'
+          # dt - Command Execution Time Diff Tool
+          
+          ## Installation
+          
+          Copy dt.exe to a directory in your PATH.
+          
+          ## Basic Usage
+          
+          See README.md for full documentation.
+          EOF
+          
+          # Create zip for Windows
+          cd package
+          powershell -Command "Compress-Archive -Path '${PACKAGE_NAME}' -DestinationPath '${PACKAGE_NAME}-x86_64-windows.zip' -Force"
+          cd ..
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dt-packages
+          name: dt-packages-${{ matrix.target }}
           path: |
             package/*.tar.gz
             package/*.zip
