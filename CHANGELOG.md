@@ -1,4 +1,10 @@
 # Changelog
+## 1.2.1 — 2026-03-04
+- feat: 改进交互式 diff TUI 与存储管理体验
+- fix: 修复 clippy single_match 告警
+- ci: 扩展 GitHub Actions 多平台构建产物
+- chore: 版本提升到 v1.2.1
+
 ## 0.1.9 — 2025-12-03
 - feat(navigation): improve paging in Selection focus with dynamic page sizing based on terminal height
 - feat(keys): add Ctrl+f/Ctrl+b shortcuts for page down/up in Selection focus (vim/emacs style)
