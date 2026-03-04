@@ -1,56 +1,10 @@
-use crate::storage::{CommandExecution, CommandRecord};
+use crate::storage::{self, CommandExecution, CommandRecord};
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Instant;
-
-fn format_command(command: &str) -> String {
-    // Remove leading and trailing whitespace
-    let trimmed = command.trim();
-
-    // Normalize spaces: replace multiple consecutive spaces with single space, and handle spaces around pipe symbols
-    let normalized = trimmed.chars().collect::<Vec<_>>();
-    let mut result = String::new();
-    let mut i = 0;
-
-    while i < normalized.len() {
-        let c = normalized[i];
-
-        if c.is_whitespace() {
-            // Skip consecutive whitespace characters
-            while i < normalized.len() && normalized[i].is_whitespace() {
-                i += 1;
-            }
-            // If next character is pipe symbol, don't add space
-            if i < normalized.len() && normalized[i] == '|' {
-                result.push('|');
-                i += 1;
-                // Skip all spaces after pipe symbol
-                while i < normalized.len() && normalized[i].is_whitespace() {
-                    i += 1;
-                }
-            } else {
-                result.push(' ');
-            }
-        } else if c == '|' {
-            // Handle pipe symbol, remove spaces before and after
-            result.push('|');
-            i += 1;
-            // Skip following spaces
-            while i < normalized.len() && normalized[i].is_whitespace() {
-                i += 1;
-            }
-        } else {
-            result.push(c);
-            i += 1;
-        }
-    }
-
-    result.trim().to_string()
-}
 
 pub struct CommandExecutor;
 
@@ -126,8 +80,8 @@ impl CommandExecutor {
         let duration = start_time.elapsed();
 
         let working_dir = std::env::current_dir()?;
-        let formatted_command = format_command(command);
-        let command_hash = Self::hash_command(&formatted_command);
+        let formatted_command = storage::format_command(command);
+        let command_hash = storage::hash_command(&formatted_command);
         let timestamp = Utc::now();
         let record_id = format!("{}_{}", command_hash, timestamp.timestamp());
 
@@ -153,12 +107,5 @@ impl CommandExecutor {
         };
 
         Ok(execution)
-    }
-
-    fn hash_command(command: &str) -> String {
-        let formatted_command = format_command(command);
-        let mut hasher = Sha256::new();
-        hasher.update(formatted_command.as_bytes());
-        hex::encode(hasher.finalize())
     }
 }

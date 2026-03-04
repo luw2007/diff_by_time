@@ -76,7 +76,7 @@ impl I18n {
             "help_config_tui_mode".to_string(),
             "display.tui_mode: interactive | simple (interactive by default)".to_string(),
         );
-        en.insert("help_config_alt_screen".to_string(), "display.alt_screen: true | false (use alternate screen in interactive mode; default: false)".to_string());
+        en.insert("help_config_alt_screen".to_string(), "display.alt_screen: true | false (use alternate screen in interactive mode; default: true)".to_string());
         en.insert(
             "help_clean".to_string(),
             "Clean history records".to_string(),
@@ -271,27 +271,40 @@ impl I18n {
         en.insert("status_filter".to_string(), "Filter".to_string());
         en.insert(
             "status_nav_narrow".to_string(),
-            "jk/PgUp page · Space sel · Tab→Prev · ?=help".to_string(),
+            "jk/PgUp page · Space sel · Ctrl+X del · Tab→Prev · ?=help".to_string(),
         );
         en.insert(
             "status_nav_narrow_show".to_string(),
-            "jk/PgUp page · Enter show · Tab→Prev · ?=help".to_string(),
+            "jk/PgUp page · Enter show · Ctrl+X del · Tab→Prev · ?=help".to_string(),
         );
         en.insert(
             "status_nav_medium".to_string(),
-            "jk/PgUp/^f/^b page · Space/Enter sel · Tab→Prev · Enter diff · ?=help".to_string(),
+            "jk/PgUp/^f/^b page · Space/Enter sel · Ctrl+X del · Tab→Prev · Enter diff · ?=help"
+                .to_string(),
         );
         en.insert(
             "status_nav_medium_show".to_string(),
-            "jk/PgUp/^f/^b page · Enter show · Tab→Prev · ?=help".to_string(),
+            "jk/PgUp/^f/^b page · Enter show · Ctrl+X del · Tab→Prev · ?=help".to_string(),
         );
         en.insert(
             "status_nav_compact".to_string(),
-            "Sel: type/jk, PgUp/PgDn or ^f/^b page, Space/Enter toggle, Tab→Preview | Prev: jk return, Shift/Ctrl+↑↓ scroll, Enter diff, q back, Q exit".to_string(),
+            "Sel: type/jk, PgUp/PgDn or ^f/^b page, Space/Enter toggle, Ctrl+X del (confirm) Tab→Preview | Prev: jk return, Shift/Ctrl+↑↓ scroll, Enter diff, q back, Q exit".to_string(),
         );
         en.insert(
             "status_nav_compact_show".to_string(),
-            "Sel: type/jk, PgUp/PgDn or ^f/^b page, Enter show, Tab→Preview | Prev: jk return, Shift/Ctrl+↑↓ scroll, Enter show, q back, Q exit".to_string(),
+            "Sel: type/jk, PgUp/PgDn or ^f/^b page, Enter show, Ctrl+X del (confirm) Tab→Preview | Prev: jk return, Shift/Ctrl+↑↓ scroll, Enter show, q back, Q exit".to_string(),
+        );
+        en.insert(
+            "status_nav_filter_narrow".to_string(),
+            "↑↓/jk · Enter · type filter · ? help".to_string(),
+        );
+        en.insert(
+            "status_nav_filter_medium".to_string(),
+            "↑↓/jk, PgUp/PgDn, Home/End · type filter (Backspace/^w) · Enter · ? help".to_string(),
+        );
+        en.insert(
+            "status_nav_filter_compact".to_string(),
+            "Nav: ↑↓/jk, PgUp/PgDn or ^f/^b, Home/End or ^a/^e | Filter: type, Backspace, ^w word, Del/^u clear | Enter confirm, Esc/^c/^d cancel".to_string(),
         );
         en.insert(
             "delete_confirm_status".to_string(),
@@ -330,8 +343,6 @@ impl I18n {
             "Only one record can be selected at once.".to_string(),
         );
         en.insert("no_matches".to_string(), "No matches found".to_string());
-        en.insert("navigate_hint".to_string(), "Navigation — Selection: type/jk, PgUp/PgDn or Ctrl+f/b page, Space/Enter toggle, Tab → preview; Preview: jk return, Shift/Ctrl+↑/↓ scroll, Enter toggle/diff, Space/b/F or PgUp/PgDn page, q back, Q exit; Esc back/exit".to_string());
-        en.insert("navigate_hint_filter_list".to_string(), "Navigation — ↑/↓ or j/k, Ctrl+p/n; PgUp/PgDn or Ctrl+f/b; Home/End or Ctrl+a/e; Filter: type, Backspace delete, Ctrl+w word, Delete/Ctrl+u clear; Enter confirm, Esc/Ctrl+c/d cancel".to_string());
         en.insert(
             "select_clean_command".to_string(),
             "Select a command to clean:".to_string(),
@@ -409,6 +420,9 @@ impl I18n {
             "preview_truncated_hint".to_string(),
             "… truncated".to_string(),
         );
+        en.insert("preview_scroll_percent".to_string(), "{0}%".to_string());
+        en.insert("preview_scroll_top".to_string(), "TOP".to_string());
+        en.insert("preview_scroll_bot".to_string(), "BOT".to_string());
         en.insert(
             "preview_no_selection".to_string(),
             "Select a record to preview output".to_string(),
@@ -485,6 +499,10 @@ impl I18n {
         en.insert(
             "selection_help_clear".to_string(),
             "Clear filter: Ctrl+u (clear all), Ctrl+w (delete word)".to_string(),
+        );
+        en.insert(
+            "selection_help_delete".to_string(),
+            "Delete: Ctrl+X or Shift+Backspace (press again to confirm)".to_string(),
         );
         en.insert("stderr_diff".to_string(), "stderr diff:".to_string());
         en.insert(
@@ -642,7 +660,7 @@ impl I18n {
         );
         zh.insert(
             "help_config_alt_screen".to_string(),
-            "display.alt_screen: true | false（交互模式是否使用备用屏，默认 false）".to_string(),
+            "display.alt_screen: true | false（交互模式是否使用备用屏，默认 true）".to_string(),
         );
         zh.insert("help_clean".to_string(), "清理历史记录".to_string());
         zh.insert(
@@ -802,27 +820,40 @@ impl I18n {
         zh.insert("status_filter".to_string(), "筛选".to_string());
         zh.insert(
             "status_nav_narrow".to_string(),
-            "jk/PgUp翻页 · 空格选择 · Tab→预览 · ?=帮助".to_string(),
+            "jk/PgUp翻页 · 空格选择 · Ctrl+X 删除 · Tab→预览 · ?=帮助".to_string(),
         );
         zh.insert(
             "status_nav_narrow_show".to_string(),
-            "jk/PgUp翻页 · 回车查看 · Tab→预览 · ?=帮助".to_string(),
+            "jk/PgUp翻页 · 回车查看 · Ctrl+X 删除 · Tab→预览 · ?=帮助".to_string(),
         );
         zh.insert(
             "status_nav_medium".to_string(),
-            "jk/PgUp/^f/^b翻页 · 空格/Enter选择 · Tab→预览 · Enter比较 · ?=帮助".to_string(),
+            "jk/PgUp/^f/^b翻页 · 空格/Enter选择 · Ctrl+X 删除 · Tab→预览 · Enter比较 · ?=帮助"
+                .to_string(),
         );
         zh.insert(
             "status_nav_medium_show".to_string(),
-            "jk/PgUp/^f/^b翻页 · 回车查看 · Tab→预览 · ?=帮助".to_string(),
+            "jk/PgUp/^f/^b翻页 · 回车查看 · Ctrl+X 删除 · Tab→预览 · ?=帮助".to_string(),
         );
         zh.insert(
             "status_nav_compact".to_string(),
-            "选择: 输入/jk, PgUp/PgDn或^f/^b翻页, 空格/Enter切换, Tab入预览 | 预览: jk返回, Shift/Ctrl+↑↓逐行, Enter比较, q返回, Q退出".to_string(),
+            "选择: 输入/jk, PgUp/PgDn或^f/^b翻页, 空格/Enter切换, Ctrl+X 删除(二次确认) Tab入预览 | 预览: jk返回, Shift/Ctrl+↑↓逐行, Enter比较, q返回, Q退出".to_string(),
         );
         zh.insert(
             "status_nav_compact_show".to_string(),
-            "选择: 输入/jk, PgUp/PgDn或^f/^b翻页, 回车查看, Tab入预览 | 预览: jk返回, Shift/Ctrl+↑↓逐行, 回车查看, q返回, Q退出".to_string(),
+            "选择: 输入/jk, PgUp/PgDn或^f/^b翻页, 回车查看, Ctrl+X 删除(二次确认) Tab入预览 | 预览: jk返回, Shift/Ctrl+↑↓逐行, 回车查看, q返回, Q退出".to_string(),
+        );
+        zh.insert(
+            "status_nav_filter_narrow".to_string(),
+            "↑↓/jk · 回车确认 · 输入筛选 · ? 帮助".to_string(),
+        );
+        zh.insert(
+            "status_nav_filter_medium".to_string(),
+            "↑↓/jk, PgUp/PgDn, Home/End · 输入筛选(Backspace/^w) · 回车确认 · ? 帮助".to_string(),
+        );
+        zh.insert(
+            "status_nav_filter_compact".to_string(),
+            "导航: ↑↓/jk, PgUp/PgDn或^f/^b, Home/End或^a/^e | 筛选: 输入, Backspace, ^w删词, Del/^u清空 | Enter确认, Esc/^c/^d取消".to_string(),
         );
         zh.insert(
             "delete_confirm_status".to_string(),
@@ -861,8 +892,6 @@ impl I18n {
             "一次只能选择一条记录。".to_string(),
         );
         zh.insert("no_matches".to_string(), "没有找到匹配的记录".to_string());
-        zh.insert("navigate_hint".to_string(), "导航 — 选择: 输入/jk, PgUp/PgDn或Ctrl+f/b翻页, 空格/Enter 切换, Tab → 预览；预览: jk 返回, Shift/Ctrl+↑/↓ 逐行, Enter 切换/比较, 空格/b/F 或 PgUp/PgDn 翻页, q 返回, Q 退出；Esc 返回/退出".to_string());
-        zh.insert("navigate_hint_filter_list".to_string(), "导航 — ↑/↓ 或 j/k, Ctrl+p/n；PgUp/PgDn 或 Ctrl+f/b；Home/End 或 Ctrl+a/e；过滤：输入字符，Backspace 删一字，Ctrl+w 删一词，Delete/Ctrl+u 清空；Enter 确认，Esc/Ctrl+c/d 取消".to_string());
         zh.insert(
             "select_clean_command".to_string(),
             "选择要清理的命令:".to_string(),
@@ -937,6 +966,9 @@ impl I18n {
             "preview_truncated_hint".to_string(),
             "… 内容较长，已截断".to_string(),
         );
+        zh.insert("preview_scroll_percent".to_string(), "{0}%".to_string());
+        zh.insert("preview_scroll_top".to_string(), "顶".to_string());
+        zh.insert("preview_scroll_bot".to_string(), "底".to_string());
         zh.insert(
             "preview_no_selection".to_string(),
             "请选择记录以查看输出预览".to_string(),
@@ -1007,6 +1039,10 @@ impl I18n {
         zh.insert(
             "selection_help_clear".to_string(),
             "清除筛选: Ctrl+u (清除全部), Ctrl+w (删除单词)".to_string(),
+        );
+        zh.insert(
+            "selection_help_delete".to_string(),
+            "删除记录: Ctrl+X 或 Shift+Backspace（再次触发以确认删除）".to_string(),
         );
         zh.insert("stderr_diff".to_string(), "错误输出差异:".to_string());
         zh.insert("output_identical".to_string(), "输出完全一致".to_string());

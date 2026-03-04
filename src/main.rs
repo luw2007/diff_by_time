@@ -10,8 +10,8 @@ mod store_manager;
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use colored::*;
-use sha2::{Digest, Sha256};
 use std::fmt;
+use std::fs;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -20,7 +20,6 @@ use config::Config;
 use differ::Differ;
 use executor::CommandExecutor;
 use i18n::I18n;
-use std::fs;
 use storage::CommandExecution;
 use store_manager::StoreManager;
 
@@ -216,7 +215,7 @@ fn main() -> Result<()> {
             let RunArgs { command, diff_with } = run_args;
 
             let command_str = join_args_for_shell(&command);
-            let command_hash = hash_command(&command_str);
+            let command_hash = storage::hash_command(&command_str);
 
             // Parse diff_with to determine if it's a target (first/last) or a short code
             let (diff_target, diff_code) = if let Some(value) = diff_with {
@@ -335,7 +334,7 @@ fn main() -> Result<()> {
 
             if !command.is_empty() {
                 let command_str = join_args_for_shell(&command);
-                let command_hash = hash_command(&command_str);
+                let command_hash = storage::hash_command(&command_str);
                 let mut executions = store.find_executions(&command_hash, &i18n)?;
                 if executions.len() < 2 {
                     println!("{}", i18n.t("need_at_least_two").red().bold());
@@ -393,7 +392,7 @@ fn main() -> Result<()> {
 
             if !command.is_empty() {
                 let command_str = join_args_for_shell(&command);
-                let command_hash = hash_command(&command_str);
+                let command_hash = storage::hash_command(&command_str);
                 let executions = store.find_executions(&command_hash, &i18n)?;
                 if executions.is_empty() {
                     println!("{}", i18n.t("no_records").yellow());
@@ -759,58 +758,6 @@ fn shell_quote(arg: &str) -> String {
         let escaped = arg.replace('\'', "'\\''");
         format!("'{}'", escaped)
     }
-}
-
-fn format_command(command: &str) -> String {
-    // Remove leading and trailing whitespace
-    let trimmed = command.trim();
-
-    // Normalize spaces: replace multiple consecutive spaces with single space, and handle spaces around pipe symbols
-    let normalized = trimmed.chars().collect::<Vec<_>>();
-    let mut result = String::new();
-    let mut i = 0;
-
-    while i < normalized.len() {
-        let c = normalized[i];
-
-        if c.is_whitespace() {
-            // Skip consecutive whitespace characters
-            while i < normalized.len() && normalized[i].is_whitespace() {
-                i += 1;
-            }
-            // If next character is pipe symbol, don't add space
-            if i < normalized.len() && normalized[i] == '|' {
-                result.push('|');
-                i += 1;
-                // Skip all spaces after pipe symbol
-                while i < normalized.len() && normalized[i].is_whitespace() {
-                    i += 1;
-                }
-            } else {
-                result.push(' ');
-            }
-        } else if c == '|' {
-            // Handle pipe symbol, remove spaces before and after
-            result.push('|');
-            i += 1;
-            // Skip following spaces
-            while i < normalized.len() && normalized[i].is_whitespace() {
-                i += 1;
-            }
-        } else {
-            result.push(c);
-            i += 1;
-        }
-    }
-
-    result.trim().to_string()
-}
-
-fn hash_command(command: &str) -> String {
-    let formatted_command = format_command(command);
-    let mut hasher = Sha256::new();
-    hasher.update(formatted_command.as_bytes());
-    hex::encode(hasher.finalize())
 }
 
 #[cfg(test)]

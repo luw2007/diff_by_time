@@ -35,6 +35,188 @@ struct CommandGroup {
     latest: chrono::DateTime<chrono::Utc>,
 }
 
+#[cfg(test)]
+mod interactive_selection_tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+    fn exec_with(id: &str, ts: i64, command: &str) -> CommandExecution {
+        let timestamp = Utc.timestamp_opt(ts, 0).single().unwrap();
+        let record = crate::storage::CommandRecord {
+            command: command.to_string(),
+            command_hash: crate::storage::hash_command(command),
+            timestamp,
+            working_dir: std::path::PathBuf::from("/tmp"),
+            exit_code: 0,
+            duration_ms: 1,
+            record_id: id.to_string(),
+            short_code: Some(id.to_string()),
+        };
+        CommandExecution {
+            record,
+            stdout: format!("out-{}\n", id),
+            stderr: String::new(),
+            stdout_path: None,
+            stderr_path: None,
+            streamed_stdout: false,
+            streamed_stderr: false,
+        }
+    }
+
+    fn apply_keys(
+        state: &mut InteractiveSelectionState,
+        i18n: &I18n,
+        selection_goal: usize,
+        keys: &[(KeyCode, KeyModifiers)],
+    ) -> InteractiveSelectionStep {
+        let mut loader = || Vec::<CommandExecution>::new();
+        let mut delete_action: Option<fn(&CommandExecution) -> Result<()>> = None;
+        let mut last = InteractiveSelectionStep::Continue {
+            needs_redraw: false,
+        };
+        for (code, mods) in keys {
+            let step = Differ::apply_interactive_selection_event(
+                state,
+                Event::Key(KeyEvent::new(*code, *mods)),
+                i18n,
+                selection_goal,
+                Some(24),
+                &mut loader,
+                &mut delete_action,
+            );
+            match step {
+                InteractiveSelectionStep::Continue { .. } => {
+                    last = step;
+                }
+                InteractiveSelectionStep::Break => return InteractiveSelectionStep::Break,
+            }
+        }
+        last
+    }
+
+    #[test]
+    fn interactive_select_two_then_enter_breaks() {
+        let i18n = I18n::new("en");
+        let execs = vec![
+            exec_with("a", 1, "cat a"),
+            exec_with("b", 2, "cat b"),
+            exec_with("c", 3, "cat c"),
+        ];
+        let mut state = InteractiveSelectionState {
+            filter_input: String::new(),
+            selected_ids: Vec::new(),
+            current_selection: 0,
+            preview_offset: 0,
+            show_help: false,
+            focus: SelectionFocus::Selection,
+            pending_delete: None,
+            last_action_message: None,
+            current_execs: execs,
+            filtered_indices: vec![0, 1, 2],
+        };
+
+        let step = apply_keys(
+            &mut state,
+            &i18n,
+            2,
+            &[
+                (KeyCode::Char(' '), KeyModifiers::NONE),
+                (KeyCode::Char('q'), KeyModifiers::NONE),
+                (KeyCode::Char('j'), KeyModifiers::NONE),
+                (KeyCode::Char(' '), KeyModifiers::NONE),
+            ],
+        );
+        match step {
+            InteractiveSelectionStep::Continue { .. } => {}
+            InteractiveSelectionStep::Break => panic!("unexpected break"),
+        }
+        assert_eq!(state.selected_ids.len(), 2);
+        let expected = i18n.t("selection_complete");
+        assert_eq!(
+            state.last_action_message.as_deref(),
+            Some(expected.as_str())
+        );
+
+        let step = apply_keys(
+            &mut state,
+            &i18n,
+            2,
+            &[(KeyCode::Enter, KeyModifiers::NONE)],
+        );
+        assert!(matches!(step, InteractiveSelectionStep::Break));
+    }
+
+    #[test]
+    fn interactive_filter_and_backspace_updates_indices() {
+        let i18n = I18n::new("en");
+        let execs = vec![
+            exec_with("a", 1, "echo alpha"),
+            exec_with("b", 2, "echo beta"),
+            exec_with("c", 3, "echo gamma"),
+        ];
+        let mut state = InteractiveSelectionState {
+            filter_input: String::new(),
+            selected_ids: Vec::new(),
+            current_selection: 0,
+            preview_offset: 0,
+            show_help: false,
+            focus: SelectionFocus::Selection,
+            pending_delete: None,
+            last_action_message: None,
+            current_execs: execs,
+            filtered_indices: vec![0, 1, 2],
+        };
+
+        let _ = apply_keys(
+            &mut state,
+            &i18n,
+            2,
+            &[
+                (KeyCode::Char('b'), KeyModifiers::NONE),
+                (KeyCode::Char('e'), KeyModifiers::NONE),
+                (KeyCode::Char('t'), KeyModifiers::NONE),
+                (KeyCode::Char('a'), KeyModifiers::NONE),
+            ],
+        );
+        assert_eq!(state.filter_input, "beta");
+        assert_eq!(state.filtered_indices.len(), 1);
+
+        let _ = apply_keys(
+            &mut state,
+            &i18n,
+            2,
+            &[(KeyCode::Backspace, KeyModifiers::NONE)],
+        );
+        assert_eq!(state.filter_input, "bet");
+        assert!(!state.filtered_indices.is_empty());
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelectionFocus {
+    Selection,
+    Preview,
+}
+
+struct InteractiveSelectionState {
+    filter_input: String,
+    selected_ids: Vec<String>,
+    current_selection: usize,
+    preview_offset: u16,
+    show_help: bool,
+    focus: SelectionFocus,
+    pending_delete: Option<CommandExecution>,
+    last_action_message: Option<String>,
+    current_execs: Vec<CommandExecution>,
+    filtered_indices: Vec<usize>,
+}
+
+enum InteractiveSelectionStep {
+    Continue { needs_redraw: bool },
+    Break,
+}
+
 // legacy terminal size constants removed (ratatui handles layout)
 
 // legacy preview enums removed in ratatui rewrite
@@ -64,6 +246,22 @@ impl Differ {
             i18n.t(medium)
         } else {
             // Wide screen: show full hints (~145 chars)
+            i18n.t(compact)
+        }
+    }
+
+    /// 简单可筛选列表（命令/文件选择器）的导航提示
+    fn get_filter_nav_hint_by_width(width: u16, i18n: &I18n) -> String {
+        let (narrow, medium, compact) = (
+            "status_nav_filter_narrow",
+            "status_nav_filter_medium",
+            "status_nav_filter_compact",
+        );
+        if width < 90 {
+            i18n.t(narrow)
+        } else if width < 165 {
+            i18n.t(medium)
+        } else {
             i18n.t(compact)
         }
     }
@@ -573,8 +771,8 @@ impl Differ {
             }
             f.render_stateful_widget(list, rows[1], &mut state);
 
-            let foot = Paragraph::new(i18n.t("navigate_hint_filter_list"))
-                .style(Style::default().fg(Color::Gray));
+            let hint = Self::get_filter_nav_hint_by_width(root.width, i18n);
+            let foot = Paragraph::new(hint).style(Style::default().fg(Color::Gray));
             f.render_widget(foot, rows[2]);
         };
 
@@ -629,274 +827,7 @@ impl Differ {
         }
         let _ = terminal::disable_raw_mode();
         res
-    } /*
-      fn interactive_select_command_string(
-          groups: &[CommandGroup],
-          i18n: &I18n,
-          use_alt_screen: bool,
-          max_viewport: Option<usize>,
-      ) -> Option<String> {
-          if terminal::enable_raw_mode().is_err() {
-              return None;
-          }
-          let mut stdout = io::stdout();
-          if use_alt_screen {
-              print!("\x1b[?1049h");
-          }
-          print!("\x1b[?7l\x1b[?25l");
-          stdout.flush().ok();
-
-          let mut filter_input = String::new();
-          let mut current_selection = 0usize;
-          let mut scroll_offset = 0usize;
-          let fuzzy = SkimMatcher::new();
-
-          loop {
-              print!("\x1b[2J\x1b[H");
-              // Enforce minimum terminal size before rendering UI
-              let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-              if cols < MIN_TERMINAL_COLS || rows < MIN_TERMINAL_ROWS {
-                  let warn = i18n.t_format(
-                      "terminal_too_small",
-                      &[
-                          &MIN_TERMINAL_COLS.to_string(),
-                          &MIN_TERMINAL_ROWS.to_string(),
-                          &cols.to_string(),
-                          &rows.to_string(),
-                      ],
-                  );
-                  print!("{}\r\n", warn);
-                  stdout.flush().ok();
-                  std::thread::sleep(std::time::Duration::from_millis(300));
-                  continue;
-              }
-              print!("{}\r\n", i18n.t("select_clean_command"));
-              // Terminal width for prompt truncation
-              let (cols, _rows) = crossterm::terminal::size().unwrap_or((80, 24));
-              let prompt =
-                  Self::truncate_for_column(&i18n.t("interactive_filter"), cols as usize - 2);
-              print!("{}: ", prompt);
-              print!("{}\r\n\r\n", filter_input);
-
-              let items: Vec<(usize, String)> = groups
-                  .iter()
-                  .enumerate()
-                  .map(|(i, g)| {
-                      let dt = g
-                          .latest
-                          .with_timezone(&chrono::Local)
-                          .format("%Y-%m-%d %H:%M:%S")
-                          .to_string();
-                      let text = format!("{} {} {} {}", g.command, g.count, dt, i + 1);
-                      (i, text)
-                  })
-                  .collect();
-              let filtered_indices: Vec<usize> = if filter_input.is_empty() {
-                  (0..groups.len()).collect()
-              } else {
-                  let matched = fuzzy.match_and_sort(&filter_input, items);
-                  matched.into_iter().map(|(i, _, _)| i).collect()
-              };
-
-              if filtered_indices.is_empty() {
-                  print!("\x1b[31m{}\x1b[0m\r\n", i18n.t("no_matches"));
-              } else {
-                  if current_selection >= filtered_indices.len() {
-                      current_selection = filtered_indices.len().saturating_sub(1);
-                  }
-                  let viewport = if let Some(v) = max_viewport {
-                      v.max(3)
-                  } else {
-                      let (_cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-                      let reserved = 6usize;
-                      let mut v = rows as usize;
-                      v = v.saturating_sub(reserved);
-                      if v < 5 {
-                          v = 5;
-                      }
-                      v
-                  };
-                  if current_selection < scroll_offset {
-                      scroll_offset = current_selection;
-                  } else if current_selection >= scroll_offset + viewport {
-                      scroll_offset = current_selection + 1 - viewport;
-                  }
-                  let end = (scroll_offset + viewport).min(filtered_indices.len());
-                  for (list_idx, gi_ref) in filtered_indices
-                      .iter()
-                      .enumerate()
-                      .skip(scroll_offset)
-                      .take(end - scroll_offset)
-                  {
-                      let gi = *gi_ref;
-                      let g = &groups[gi];
-                      let dt = g
-                          .latest
-                          .with_timezone(&chrono::Local)
-                          .format("%Y-%m-%d %H:%M:%S");
-                      let line = format!(
-                          "{}: {} ({}: {}, {}: {})",
-                          gi + 1,
-                          g.command,
-                          i18n.t("count_label"),
-                          g.count,
-                          i18n.t("latest_label"),
-                          dt
-                      );
-                      if list_idx == current_selection {
-                          print!("\x1b[44;37m{}\x1b[0m\x1b[K\r\n", line);
-                      } else {
-                          print!("{}\x1b[K\r\n", line);
-                      }
-                  }
-              }
-
-              print!("\r\n");
-              let hint = Self::truncate_for_column(&i18n.t("navigate_hint"), cols as usize);
-              print!("\x1b[90m{}\x1b[0m\r\n", hint);
-              stdout.flush().ok();
-
-              if let Ok(Event::Key(key)) = event::read() {
-                  let is_ctrl_combo = key.modifiers.contains(KeyModifiers::CONTROL);
-                  let is_ctrl_char =
-                      matches!(key.code, KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}');
-                  if is_ctrl_combo || is_ctrl_char {
-                      let exit_match = match key.code {
-                          KeyCode::Char('c')
-                          | KeyCode::Char('C')
-                          | KeyCode::Char('d')
-                          | KeyCode::Char('D') => true,
-                          KeyCode::Char(cc) if cc == '\u{3}' || cc == '\u{4}' => true,
-                          _ => false,
-                      };
-                      if exit_match {
-                          if use_alt_screen {
-                              print!("\x1b[?1049l");
-                          }
-                          print!("\x1b[?7h\x1b[?25h");
-                          stdout.flush().ok();
-                          let _ = terminal::disable_raw_mode();
-                          return None;
-                      }
-                  }
-                  match key.code {
-                      // Up/Down and vi-keys
-                      KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                          current_selection = current_selection.saturating_sub(1);
-                      }
-                      KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                          if !filtered_indices.is_empty()
-                              && current_selection < filtered_indices.len() - 1
-                          {
-                              current_selection += 1;
-                          }
-                      }
-                      // Ctrl-p / Ctrl-n
-                      KeyCode::Char('p') if is_ctrl_combo => {
-                          current_selection = current_selection.saturating_sub(1);
-                      }
-                      KeyCode::Char('n') if is_ctrl_combo => {
-                          if !filtered_indices.is_empty()
-                              && current_selection < filtered_indices.len() - 1
-                          {
-                              current_selection += 1;
-                          }
-                      }
-                      // PageDown / Ctrl-f, PageUp / Ctrl-b
-                      KeyCode::PageDown | KeyCode::Char('f') if is_ctrl_combo => {
-                          if !filtered_indices.is_empty() {
-                              let (_cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-                              let reserved = 6usize;
-                              let mut viewport = rows as usize;
-                              viewport = viewport.saturating_sub(reserved);
-                              if viewport < 5 {
-                                  viewport = 5;
-                              }
-                              let max_idx = filtered_indices.len().saturating_sub(1);
-                              current_selection = (current_selection + viewport).min(max_idx);
-                          }
-                      }
-                      KeyCode::PageUp | KeyCode::Char('b') if is_ctrl_combo => {
-                          if !filtered_indices.is_empty() {
-                              let (_cols, rows) = terminal::size().unwrap_or((80, 24));
-                              let reserved = 6usize;
-                              let mut viewport = rows as usize;
-                              viewport = viewport.saturating_sub(reserved);
-                              if viewport < 5 {
-                                  viewport = 5;
-                              }
-                              current_selection = current_selection.saturating_sub(viewport);
-                          }
-                      }
-                      // Home/End and Ctrl-a / Ctrl-e
-                      KeyCode::Home | KeyCode::Char('a') if is_ctrl_combo => {
-                          current_selection = 0;
-                      }
-                      KeyCode::End | KeyCode::Char('e') if is_ctrl_combo => {
-                          if !filtered_indices.is_empty() {
-                              current_selection = filtered_indices.len() - 1;
-                          }
-                      }
-                      KeyCode::Enter => {
-                          if !filtered_indices.is_empty() {
-                              let gi = filtered_indices[current_selection];
-                              if use_alt_screen {
-                                  print!("\x1b[?1049l");
-                              }
-                              print!("\x1b[?7h\x1b[?25h");
-                              stdout.flush().ok();
-                              let _ = terminal::disable_raw_mode();
-                              return Some(groups[gi].command.clone());
-                          }
-                      }
-                      // Clear query / delete word / delete to end
-                      KeyCode::Char('u') if is_ctrl_combo => {
-                          filter_input.clear();
-                          current_selection = 0;
-                          scroll_offset = 0;
-                      }
-                      KeyCode::Char('w') if is_ctrl_combo => {
-                          while filter_input.ends_with(char::is_whitespace) {
-                              filter_input.pop();
-                          }
-                          while !filter_input.is_empty()
-                              && !filter_input.ends_with(char::is_whitespace)
-                          {
-                              filter_input.pop();
-                          }
-                          current_selection = 0;
-                          scroll_offset = 0;
-                      }
-                      _ if Self::is_backspace_event(&key) => {
-                          filter_input.pop();
-                          current_selection = 0;
-                          scroll_offset = 0;
-                      }
-                      KeyCode::Delete => {
-                          filter_input.clear();
-                          current_selection = 0;
-                          scroll_offset = 0;
-                      }
-                      KeyCode::Esc => {
-                          if use_alt_screen {
-                              print!("\x1b[?1049l");
-                          }
-                          print!("\x1b[?7h\x1b[?25h");
-                          stdout.flush().ok();
-                          let _ = terminal::disable_raw_mode();
-                          return None;
-                      }
-                      KeyCode::Char(c) => {
-                          filter_input.push(c);
-                          current_selection = 0;
-                          scroll_offset = 0;
-                      }
-                      _ => {}
-                  }
-              }
-          }
-      }
-      */
+    }
 
     pub fn select_file_for_clean(
         files: &[std::path::PathBuf],
@@ -1017,8 +948,8 @@ impl Differ {
             }
             f.render_stateful_widget(list, rows[1], &mut state);
 
-            let foot = Paragraph::new(i18n.t("navigate_hint_filter_list"))
-                .style(Style::default().fg(Color::Gray));
+            let hint = Self::get_filter_nav_hint_by_width(root.width, i18n);
+            let foot = Paragraph::new(hint).style(Style::default().fg(Color::Gray));
             f.render_widget(foot, rows[2]);
         };
 
@@ -1381,8 +1312,8 @@ impl Differ {
             }
             f.render_stateful_widget(list, rows[1], &mut state);
 
-            let foot = Paragraph::new(i18n.t("navigate_hint_filter_list"))
-                .style(Style::default().fg(Color::Gray));
+            let hint = Self::get_filter_nav_hint_by_width(root.width, i18n);
+            let foot = Paragraph::new(hint).style(Style::default().fg(Color::Gray));
             f.render_widget(foot, rows[2]);
         };
 
@@ -1486,7 +1417,7 @@ impl Differ {
         // Align timestamp column by padding label to same width
         let earlier_label = i18n.t("diff_earlier_label");
         let later_label = i18n.t("diff_later_label");
-        let label_width = std::cmp::max(earlier_label.len(), later_label.len());
+        let label_width = earlier_label.len().max(later_label.len());
         let earlier_label_padded = format!("{:<width$}", earlier_label, width = label_width);
         let later_label_padded = format!("{:<width$}", later_label, width = label_width);
         let earlier_time = earlier_local.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -1735,6 +1666,528 @@ impl Differ {
         result
     }
 
+    fn list_page_size_from_terminal_height(height: Option<u16>) -> usize {
+        height.unwrap_or(16).saturating_sub(6).max(1).into()
+    }
+
+    fn preview_page_from_terminal_height(height: Option<u16>) -> u16 {
+        height.unwrap_or(16).saturating_sub(4).max(1)
+    }
+
+    fn preview_half_from_terminal_height(height: Option<u16>) -> u16 {
+        (height.unwrap_or(16) / 2).max(1)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_interactive_selection_event<F, D>(
+        state: &mut InteractiveSelectionState,
+        event: Event,
+        i18n: &I18n,
+        selection_goal: usize,
+        terminal_height: Option<u16>,
+        loader: &mut F,
+        delete_action: &mut Option<D>,
+    ) -> InteractiveSelectionStep
+    where
+        F: FnMut() -> Vec<CommandExecution>,
+        D: FnMut(&CommandExecution) -> Result<()>,
+    {
+        match event {
+            Event::Key(key_event) => {
+                let ctrl = key_event.modifiers.contains(KeyModifiers::CONTROL);
+                let alt = key_event.modifiers.contains(KeyModifiers::ALT);
+                let shift = key_event.modifiers.contains(KeyModifiers::SHIFT);
+
+                let ctrl_exit =
+                    ctrl && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'));
+                let ctrl_char_exit = matches!(
+                    key_event.code,
+                    KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}'
+                );
+                if ctrl_exit || ctrl_char_exit {
+                    state.selected_ids.clear();
+                    return InteractiveSelectionStep::Break;
+                }
+
+                match key_event.code {
+                    KeyCode::Esc => {
+                        if matches!(state.focus, SelectionFocus::Preview) {
+                            if state.show_help {
+                                state.show_help = false;
+                            } else {
+                                state.focus = SelectionFocus::Selection;
+                            }
+                            return InteractiveSelectionStep::Continue { needs_redraw: true };
+                        }
+                        state.selected_ids.clear();
+                        return InteractiveSelectionStep::Break;
+                    }
+                    KeyCode::Char('x') if ctrl => {
+                        let needs_redraw = Self::handle_delete_request(
+                            delete_action,
+                            loader,
+                            &mut state.current_execs,
+                            &mut state.filtered_indices,
+                            &state.filter_input,
+                            &mut state.selected_ids,
+                            &mut state.pending_delete,
+                            &mut state.last_action_message,
+                            &mut state.current_selection,
+                            &mut state.preview_offset,
+                            i18n,
+                        );
+                        return InteractiveSelectionStep::Continue { needs_redraw };
+                    }
+                    KeyCode::Backspace if shift => {
+                        let needs_redraw = Self::handle_shift_backspace(
+                            delete_action,
+                            loader,
+                            &mut state.current_execs,
+                            &mut state.filtered_indices,
+                            &mut state.filter_input,
+                            &mut state.selected_ids,
+                            &mut state.pending_delete,
+                            &mut state.last_action_message,
+                            &mut state.current_selection,
+                            &mut state.preview_offset,
+                            matches!(state.focus, SelectionFocus::Selection),
+                            i18n,
+                        );
+                        return InteractiveSelectionStep::Continue { needs_redraw };
+                    }
+                    _ => {}
+                }
+
+                match state.focus {
+                    SelectionFocus::Selection => match key_event.code {
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            if state.current_selection > 0 {
+                                state.current_selection -= 1;
+                                state.preview_offset = 0;
+                            }
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            if state.current_selection + 1 < state.filtered_indices.len() {
+                                state.current_selection += 1;
+                                state.preview_offset = 0;
+                            }
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Char('p') if ctrl => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            if state.current_selection > 0 {
+                                state.current_selection -= 1;
+                                state.preview_offset = 0;
+                            }
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Char('n') if ctrl => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            if state.current_selection + 1 < state.filtered_indices.len() {
+                                state.current_selection += 1;
+                                state.preview_offset = 0;
+                            }
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::PageUp => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            let page_size =
+                                Self::list_page_size_from_terminal_height(terminal_height);
+                            state.current_selection =
+                                state.current_selection.saturating_sub(page_size);
+                            state.preview_offset = 0;
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::PageDown => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            if !state.filtered_indices.is_empty() {
+                                let page_size =
+                                    Self::list_page_size_from_terminal_height(terminal_height);
+                                let max_index = state.filtered_indices.len() - 1;
+                                state.current_selection =
+                                    (state.current_selection + page_size).min(max_index);
+                                state.preview_offset = 0;
+                                return InteractiveSelectionStep::Continue { needs_redraw: true };
+                            }
+                            InteractiveSelectionStep::Continue {
+                                needs_redraw: false,
+                            }
+                        }
+                        KeyCode::Char('f') if ctrl => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            if !state.filtered_indices.is_empty() {
+                                let page_size =
+                                    Self::list_page_size_from_terminal_height(terminal_height);
+                                let max_index = state.filtered_indices.len() - 1;
+                                state.current_selection =
+                                    (state.current_selection + page_size).min(max_index);
+                                state.preview_offset = 0;
+                                return InteractiveSelectionStep::Continue { needs_redraw: true };
+                            }
+                            InteractiveSelectionStep::Continue {
+                                needs_redraw: false,
+                            }
+                        }
+                        KeyCode::Char('b') if ctrl => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            let page_size =
+                                Self::list_page_size_from_terminal_height(terminal_height);
+                            state.current_selection =
+                                state.current_selection.saturating_sub(page_size);
+                            state.preview_offset = 0;
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Home | KeyCode::Char('a') if ctrl => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            state.current_selection = 0;
+                            state.preview_offset = 0;
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::End | KeyCode::Char('e') if ctrl => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            if !state.filtered_indices.is_empty() {
+                                state.current_selection = state.filtered_indices.len() - 1;
+                                state.preview_offset = 0;
+                                return InteractiveSelectionStep::Continue { needs_redraw: true };
+                            }
+                            InteractiveSelectionStep::Continue {
+                                needs_redraw: false,
+                            }
+                        }
+                        KeyCode::Tab | KeyCode::BackTab | KeyCode::Char(' ') | KeyCode::Enter => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            if selection_goal == 1 && matches!(key_event.code, KeyCode::Enter) {
+                                if let Some(&oi) =
+                                    state.filtered_indices.get(state.current_selection)
+                                {
+                                    state.selected_ids.clear();
+                                    state
+                                        .selected_ids
+                                        .push(state.current_execs[oi].record.record_id.clone());
+                                }
+                                return InteractiveSelectionStep::Break;
+                            }
+                            if matches!(key_event.code, KeyCode::Enter)
+                                && state.selected_ids.len() == selection_goal
+                            {
+                                return InteractiveSelectionStep::Break;
+                            }
+                            if let Some(&oi) = state.filtered_indices.get(state.current_selection) {
+                                if !matches!(key_event.code, KeyCode::Tab) {
+                                    let record_id =
+                                        state.current_execs[oi].record.record_id.clone();
+                                    if let Some(pos) =
+                                        state.selected_ids.iter().position(|id| id == &record_id)
+                                    {
+                                        state.selected_ids.remove(pos);
+                                        state.last_action_message = None;
+                                    } else if state.selected_ids.len() < selection_goal {
+                                        state.selected_ids.push(record_id);
+                                        if state.selected_ids.len() == selection_goal {
+                                            let msg = if selection_goal == 1 {
+                                                i18n.t("selection_complete_show")
+                                            } else {
+                                                i18n.t("selection_complete")
+                                            };
+                                            state.last_action_message = Some(msg);
+                                        } else {
+                                            state.last_action_message = None;
+                                        }
+                                    } else {
+                                        let msg = if selection_goal == 1 {
+                                            i18n.t("selection_limit_reached_single")
+                                        } else {
+                                            i18n.t("selection_limit_reached")
+                                        };
+                                        state.last_action_message = Some(msg);
+                                    }
+                                }
+                                state.focus = SelectionFocus::Preview;
+                                state.preview_offset = 0;
+                                return InteractiveSelectionStep::Continue { needs_redraw: true };
+                            }
+                            InteractiveSelectionStep::Continue {
+                                needs_redraw: false,
+                            }
+                        }
+                        KeyCode::Char('?') if !ctrl && !alt => {
+                            state.show_help = !state.show_help;
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Char(c) if !ctrl && !alt => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            state.filter_input.push(c);
+                            state.filtered_indices = Self::compute_filtered_indices(
+                                &state.current_execs,
+                                &state.filter_input,
+                            );
+                            state.current_selection = 0;
+                            state.preview_offset = 0;
+                            state.last_action_message = None;
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Backspace => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            if !state.filter_input.is_empty() {
+                                state.filter_input.pop();
+                                state.filtered_indices = Self::compute_filtered_indices(
+                                    &state.current_execs,
+                                    &state.filter_input,
+                                );
+                                state.current_selection = 0;
+                                state.preview_offset = 0;
+                                state.last_action_message = None;
+                                return InteractiveSelectionStep::Continue { needs_redraw: true };
+                            }
+                            InteractiveSelectionStep::Continue {
+                                needs_redraw: false,
+                            }
+                        }
+                        KeyCode::Delete if !ctrl && !alt => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            if !state.filter_input.is_empty() {
+                                state.filter_input.clear();
+                                state.filtered_indices = Self::compute_filtered_indices(
+                                    &state.current_execs,
+                                    &state.filter_input,
+                                );
+                                state.current_selection = 0;
+                                state.preview_offset = 0;
+                                state.last_action_message = None;
+                                return InteractiveSelectionStep::Continue { needs_redraw: true };
+                            }
+                            InteractiveSelectionStep::Continue {
+                                needs_redraw: false,
+                            }
+                        }
+                        KeyCode::Char('u') if ctrl => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            state.filter_input.clear();
+                            state.filtered_indices = Self::reload_and_filter(
+                                &mut state.current_execs,
+                                loader,
+                                &state.filter_input,
+                            );
+                            state.current_selection = 0;
+                            state.preview_offset = 0;
+                            state.last_action_message = None;
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Char('w') if ctrl => {
+                            Self::clear_delete_state(
+                                &mut state.pending_delete,
+                                &mut state.last_action_message,
+                            );
+                            while state.filter_input.ends_with(char::is_whitespace) {
+                                state.filter_input.pop();
+                            }
+                            while !state.filter_input.is_empty()
+                                && !state.filter_input.ends_with(char::is_whitespace)
+                            {
+                                state.filter_input.pop();
+                            }
+                            state.filtered_indices = Self::reload_and_filter(
+                                &mut state.current_execs,
+                                loader,
+                                &state.filter_input,
+                            );
+                            state.current_selection = 0;
+                            state.preview_offset = 0;
+                            state.last_action_message = None;
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        _ => InteractiveSelectionStep::Continue {
+                            needs_redraw: false,
+                        },
+                    },
+                    SelectionFocus::Preview => match key_event.code {
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if alt {
+                                let half = Self::preview_half_from_terminal_height(terminal_height);
+                                state.preview_offset = state.preview_offset.saturating_sub(half);
+                            } else if ctrl || shift {
+                                state.preview_offset = state.preview_offset.saturating_sub(1);
+                            } else if !state.filtered_indices.is_empty() {
+                                let previous = state.current_selection;
+                                state.current_selection = state.current_selection.saturating_sub(1);
+                                state.focus = SelectionFocus::Selection;
+                                state.show_help = false;
+                                if state.current_selection != previous {
+                                    state.preview_offset = 0;
+                                }
+                            }
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if alt {
+                                let half = Self::preview_half_from_terminal_height(terminal_height);
+                                state.preview_offset = state.preview_offset.saturating_add(half);
+                            } else if ctrl || shift {
+                                state.preview_offset = state.preview_offset.saturating_add(1);
+                            } else if !state.filtered_indices.is_empty() {
+                                if state.current_selection + 1 < state.filtered_indices.len() {
+                                    state.current_selection += 1;
+                                    state.preview_offset = 0;
+                                }
+                                state.focus = SelectionFocus::Selection;
+                                state.show_help = false;
+                            }
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::PageUp => {
+                            let page = Self::preview_page_from_terminal_height(terminal_height);
+                            state.preview_offset = state.preview_offset.saturating_sub(page);
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::PageDown => {
+                            let page = Self::preview_page_from_terminal_height(terminal_height);
+                            state.preview_offset = state.preview_offset.saturating_add(page);
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Char(' ') => {
+                            let page = Self::preview_page_from_terminal_height(terminal_height);
+                            state.preview_offset = state.preview_offset.saturating_add(page);
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Backspace | KeyCode::Char('b') => {
+                            let page = Self::preview_page_from_terminal_height(terminal_height);
+                            state.preview_offset = state.preview_offset.saturating_sub(page);
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Char('f') => {
+                            let page = Self::preview_page_from_terminal_height(terminal_height);
+                            state.preview_offset = state.preview_offset.saturating_add(page);
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Char('d') => {
+                            let half = Self::preview_half_from_terminal_height(terminal_height);
+                            state.preview_offset = state.preview_offset.saturating_add(half);
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Char('u') => {
+                            let half = Self::preview_half_from_terminal_height(terminal_height);
+                            state.preview_offset = state.preview_offset.saturating_sub(half);
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Home => {
+                            state.preview_offset = 0;
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::End => {
+                            state.preview_offset = u16::MAX;
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Char('g') if !ctrl && !alt => {
+                            state.preview_offset = 0;
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Char('G') if !ctrl && !alt => {
+                            state.preview_offset = u16::MAX;
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Char('?') if !ctrl => {
+                            state.show_help = !state.show_help;
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Char('q') => {
+                            state.focus = SelectionFocus::Selection;
+                            InteractiveSelectionStep::Continue { needs_redraw: true }
+                        }
+                        KeyCode::Char('Q') => {
+                            state.selected_ids.clear();
+                            InteractiveSelectionStep::Break
+                        }
+                        KeyCode::Enter => {
+                            if selection_goal == 1 {
+                                if let Some(&oi) =
+                                    state.filtered_indices.get(state.current_selection)
+                                {
+                                    state.selected_ids.clear();
+                                    state
+                                        .selected_ids
+                                        .push(state.current_execs[oi].record.record_id.clone());
+                                }
+                                return InteractiveSelectionStep::Break;
+                            }
+                            if state.selected_ids.len() == selection_goal {
+                                return InteractiveSelectionStep::Break;
+                            }
+                            if let Some(&oi) = state.filtered_indices.get(state.current_selection) {
+                                let record_id = state.current_execs[oi].record.record_id.clone();
+                                if let Some(pos) =
+                                    state.selected_ids.iter().position(|id| id == &record_id)
+                                {
+                                    state.selected_ids.remove(pos);
+                                } else if state.selected_ids.len() < selection_goal {
+                                    state.selected_ids.push(record_id);
+                                }
+                                return InteractiveSelectionStep::Continue { needs_redraw: true };
+                            }
+                            InteractiveSelectionStep::Continue {
+                                needs_redraw: false,
+                            }
+                        }
+                        _ => InteractiveSelectionStep::Continue {
+                            needs_redraw: false,
+                        },
+                    },
+                }
+            }
+            Event::Resize(_, _) => InteractiveSelectionStep::Continue { needs_redraw: true },
+            _ => InteractiveSelectionStep::Continue {
+                needs_redraw: false,
+            },
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn start_interactive_selection_ratatui<F, D>(
         executions: &[CommandExecution],
@@ -1764,21 +2217,6 @@ impl Differ {
         let mut terminal = Terminal::new(backend).expect("init terminal");
         let _ = terminal.clear();
 
-        let mut filter_input = String::new();
-        let mut selected_ids: Vec<String> = Vec::new();
-        let mut current_selection: usize = 0;
-        let mut preview_offset: u16 = 0;
-        let mut show_help = false;
-
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        enum Focus {
-            Selection,
-            Preview,
-        }
-        let mut focus = Focus::Selection;
-        let mut pending_delete: Option<CommandExecution> = None;
-        let mut last_action_message: Option<String> = None;
-
         let mut current_execs: Vec<CommandExecution> = if executions.is_empty() {
             loader()
         } else {
@@ -1787,8 +2225,19 @@ impl Differ {
         if current_execs.is_empty() {
             current_execs = loader();
         }
-        let mut filtered_indices = Self::compute_filtered_indices(&current_execs, &filter_input);
-
+        let filtered_indices = Self::compute_filtered_indices(&current_execs, "");
+        let mut state = InteractiveSelectionState {
+            filter_input: String::new(),
+            selected_ids: Vec::new(),
+            current_selection: 0,
+            preview_offset: 0,
+            show_help: false,
+            focus: SelectionFocus::Selection,
+            pending_delete: None,
+            last_action_message: None,
+            current_execs,
+            filtered_indices,
+        };
         let mut needs_redraw = true;
 
         loop {
@@ -1797,17 +2246,17 @@ impl Differ {
                     Self::render_ratatui_frame(
                         f,
                         i18n,
-                        &filter_input,
-                        &selected_ids,
-                        current_selection,
-                        &mut preview_offset,
-                        &current_execs,
-                        &filtered_indices,
+                        &state.filter_input,
+                        &state.selected_ids,
+                        state.current_selection,
+                        &mut state.preview_offset,
+                        &state.current_execs,
+                        &state.filtered_indices,
                         linewise,
                         selection_goal,
-                        matches!(focus, Focus::Preview),
-                        show_help,
-                        last_action_message.as_deref(),
+                        matches!(state.focus, SelectionFocus::Preview),
+                        state.show_help,
+                        state.last_action_message.as_deref(),
                     )
                 });
                 needs_redraw = false;
@@ -1818,492 +2267,20 @@ impl Differ {
                 Err(_) => break,
             };
 
-            match event {
-                Event::Key(key_event) => {
-                    let ctrl = key_event.modifiers.contains(KeyModifiers::CONTROL);
-                    let alt = key_event.modifiers.contains(KeyModifiers::ALT);
-                    let shift = key_event.modifiers.contains(KeyModifiers::SHIFT);
-
-                    let ctrl_exit =
-                        ctrl && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'));
-                    let ctrl_char_exit = matches!(
-                        key_event.code,
-                        KeyCode::Char(c) if c == '\u{3}' || c == '\u{4}'
-                    );
-                    if ctrl_exit || ctrl_char_exit {
-                        selected_ids.clear();
-                        break;
-                    }
-
-                    match key_event.code {
-                        KeyCode::Esc => {
-                            if matches!(focus, Focus::Preview) {
-                                if show_help {
-                                    show_help = false;
-                                } else {
-                                    focus = Focus::Selection;
-                                }
-                                needs_redraw = true;
-                                continue;
-                            }
-                            selected_ids.clear();
-                            break;
-                        }
-                        KeyCode::Char('x') if ctrl => {
-                            needs_redraw |= Self::handle_delete_request(
-                                &mut delete_action,
-                                &mut loader,
-                                &mut current_execs,
-                                &mut filtered_indices,
-                                &filter_input,
-                                &mut selected_ids,
-                                &mut pending_delete,
-                                &mut last_action_message,
-                                &mut current_selection,
-                                &mut preview_offset,
-                                i18n,
-                            );
-                            continue;
-                        }
-                        KeyCode::Backspace if shift => {
-                            needs_redraw |= Self::handle_shift_backspace(
-                                &mut delete_action,
-                                &mut loader,
-                                &mut current_execs,
-                                &mut filtered_indices,
-                                &mut filter_input,
-                                &mut selected_ids,
-                                &mut pending_delete,
-                                &mut last_action_message,
-                                &mut current_selection,
-                                &mut preview_offset,
-                                matches!(focus, Focus::Selection),
-                                i18n,
-                            );
-                            continue;
-                        }
-                        _ => {}
-                    }
-
-                    match focus {
-                        Focus::Selection => match key_event.code {
-                            KeyCode::Up | KeyCode::Char('k') => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                if current_selection > 0 {
-                                    current_selection -= 1;
-                                    preview_offset = 0;
-                                }
-                                needs_redraw = true;
-                            }
-                            KeyCode::Down | KeyCode::Char('j') => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                if current_selection + 1 < filtered_indices.len() {
-                                    current_selection += 1;
-                                    preview_offset = 0;
-                                }
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('p') if ctrl => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                if current_selection > 0 {
-                                    current_selection -= 1;
-                                    preview_offset = 0;
-                                }
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('n') if ctrl => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                if current_selection + 1 < filtered_indices.len() {
-                                    current_selection += 1;
-                                    preview_offset = 0;
-                                }
-                                needs_redraw = true;
-                            }
-                            KeyCode::PageUp => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                let page_size = terminal
-                                    .size()
-                                    .map(|r| r.height.saturating_sub(6) as usize)
-                                    .unwrap_or(10);
-                                current_selection = current_selection.saturating_sub(page_size);
-                                preview_offset = 0;
-                                needs_redraw = true;
-                            }
-                            KeyCode::PageDown => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                if !filtered_indices.is_empty() {
-                                    let page_size = terminal
-                                        .size()
-                                        .map(|r| r.height.saturating_sub(6) as usize)
-                                        .unwrap_or(10);
-                                    let max_index = filtered_indices.len() - 1;
-                                    current_selection =
-                                        (current_selection + page_size).min(max_index);
-                                    preview_offset = 0;
-                                    needs_redraw = true;
-                                }
-                            }
-                            KeyCode::Char('f') if ctrl => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                if !filtered_indices.is_empty() {
-                                    let page_size = terminal
-                                        .size()
-                                        .map(|r| r.height.saturating_sub(6) as usize)
-                                        .unwrap_or(10);
-                                    let max_index = filtered_indices.len() - 1;
-                                    current_selection =
-                                        (current_selection + page_size).min(max_index);
-                                    preview_offset = 0;
-                                    needs_redraw = true;
-                                }
-                            }
-                            KeyCode::Char('b') if ctrl => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                let page_size = terminal
-                                    .size()
-                                    .map(|r| r.height.saturating_sub(6) as usize)
-                                    .unwrap_or(10);
-                                current_selection = current_selection.saturating_sub(page_size);
-                                preview_offset = 0;
-                                needs_redraw = true;
-                            }
-                            KeyCode::Home | KeyCode::Char('a') if ctrl => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                current_selection = 0;
-                                preview_offset = 0;
-                                needs_redraw = true;
-                            }
-                            KeyCode::End | KeyCode::Char('e') if ctrl => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                if !filtered_indices.is_empty() {
-                                    current_selection = filtered_indices.len() - 1;
-                                    preview_offset = 0;
-                                    needs_redraw = true;
-                                }
-                            }
-                            KeyCode::Tab
-                            | KeyCode::BackTab
-                            | KeyCode::Char(' ')
-                            | KeyCode::Enter => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                // For single selection mode, Enter immediately selects and breaks
-                                if selection_goal == 1 && matches!(key_event.code, KeyCode::Enter) {
-                                    if let Some(&oi) = filtered_indices.get(current_selection) {
-                                        selected_ids.clear();
-                                        selected_ids
-                                            .push(current_execs[oi].record.record_id.clone());
-                                    }
-                                    break;
-                                }
-                                if matches!(key_event.code, KeyCode::Enter)
-                                    && selected_ids.len() == selection_goal
-                                {
-                                    break;
-                                }
-                                if let Some(&oi) = filtered_indices.get(current_selection) {
-                                    if !matches!(key_event.code, KeyCode::Tab) {
-                                        let record_id = current_execs[oi].record.record_id.clone();
-                                        if let Some(pos) =
-                                            selected_ids.iter().position(|id| id == &record_id)
-                                        {
-                                            selected_ids.remove(pos);
-                                            last_action_message = None;
-                                        } else if selected_ids.len() < selection_goal {
-                                            selected_ids.push(record_id);
-                                            if selected_ids.len() == selection_goal {
-                                                let msg = if selection_goal == 1 {
-                                                    i18n.t("selection_complete_show")
-                                                } else {
-                                                    i18n.t("selection_complete")
-                                                };
-                                                last_action_message = Some(msg);
-                                            } else {
-                                                last_action_message = None;
-                                            }
-                                        } else {
-                                            let msg = if selection_goal == 1 {
-                                                i18n.t("selection_limit_reached_single")
-                                            } else {
-                                                i18n.t("selection_limit_reached")
-                                            };
-                                            last_action_message = Some(msg);
-                                        }
-                                    }
-                                    focus = Focus::Preview;
-                                    preview_offset = 0;
-                                    needs_redraw = true;
-                                }
-                            }
-                            KeyCode::Char('?') if !ctrl && !alt => {
-                                show_help = !show_help;
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char(c) if !ctrl && !alt => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                filter_input.push(c);
-                                filtered_indices =
-                                    Self::compute_filtered_indices(&current_execs, &filter_input);
-                                current_selection = 0;
-                                preview_offset = 0;
-                                last_action_message = None;
-                                needs_redraw = true;
-                            }
-                            KeyCode::Backspace => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                if !filter_input.is_empty() {
-                                    filter_input.pop();
-                                    filtered_indices = Self::compute_filtered_indices(
-                                        &current_execs,
-                                        &filter_input,
-                                    );
-                                    current_selection = 0;
-                                    preview_offset = 0;
-                                    last_action_message = None;
-                                    needs_redraw = true;
-                                }
-                            }
-                            KeyCode::Delete if !ctrl && !alt => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                if !filter_input.is_empty() {
-                                    filter_input.clear();
-                                    filtered_indices = Self::compute_filtered_indices(
-                                        &current_execs,
-                                        &filter_input,
-                                    );
-                                    current_selection = 0;
-                                    preview_offset = 0;
-                                    last_action_message = None;
-                                    needs_redraw = true;
-                                }
-                            }
-                            KeyCode::Char('u') if ctrl => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                filter_input.clear();
-                                filtered_indices = Self::reload_and_filter(
-                                    &mut current_execs,
-                                    &mut loader,
-                                    &filter_input,
-                                );
-                                current_selection = 0;
-                                preview_offset = 0;
-                                last_action_message = None;
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('w') if ctrl => {
-                                Self::clear_delete_state(
-                                    &mut pending_delete,
-                                    &mut last_action_message,
-                                );
-                                while filter_input.ends_with(char::is_whitespace) {
-                                    filter_input.pop();
-                                }
-                                while !filter_input.is_empty()
-                                    && !filter_input.ends_with(char::is_whitespace)
-                                {
-                                    filter_input.pop();
-                                }
-                                filtered_indices = Self::reload_and_filter(
-                                    &mut current_execs,
-                                    &mut loader,
-                                    &filter_input,
-                                );
-                                current_selection = 0;
-                                preview_offset = 0;
-                                last_action_message = None;
-                                needs_redraw = true;
-                            }
-                            _ => {}
-                        },
-                        Focus::Preview => match key_event.code {
-                            KeyCode::Up | KeyCode::Char('k') => {
-                                if alt {
-                                    let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
-                                    preview_offset = preview_offset.saturating_sub(half);
-                                } else if ctrl || shift {
-                                    preview_offset = preview_offset.saturating_sub(1);
-                                } else if !filtered_indices.is_empty() {
-                                    let previous = current_selection;
-                                    current_selection = current_selection.saturating_sub(1);
-                                    focus = Focus::Selection;
-                                    show_help = false;
-                                    if current_selection != previous {
-                                        preview_offset = 0;
-                                    }
-                                }
-                                needs_redraw = true;
-                            }
-                            KeyCode::Down | KeyCode::Char('j') => {
-                                if alt {
-                                    let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
-                                    preview_offset = preview_offset.saturating_add(half);
-                                } else if ctrl || shift {
-                                    preview_offset = preview_offset.saturating_add(1);
-                                } else if !filtered_indices.is_empty() {
-                                    if current_selection + 1 < filtered_indices.len() {
-                                        current_selection += 1;
-                                        preview_offset = 0;
-                                    }
-                                    focus = Focus::Selection;
-                                    show_help = false;
-                                }
-                                needs_redraw = true;
-                            }
-                            KeyCode::PageUp => {
-                                let page = terminal
-                                    .size()
-                                    .map(|r| r.height.saturating_sub(4))
-                                    .unwrap_or(10);
-                                preview_offset = preview_offset.saturating_sub(page);
-                                needs_redraw = true;
-                            }
-                            KeyCode::PageDown => {
-                                let page = terminal
-                                    .size()
-                                    .map(|r| r.height.saturating_sub(4))
-                                    .unwrap_or(10);
-                                preview_offset = preview_offset.saturating_add(page);
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char(' ') => {
-                                let page = terminal
-                                    .size()
-                                    .map(|r| r.height.saturating_sub(4))
-                                    .unwrap_or(10);
-                                preview_offset = preview_offset.saturating_add(page);
-                                needs_redraw = true;
-                            }
-                            KeyCode::Backspace | KeyCode::Char('b') => {
-                                let page = terminal
-                                    .size()
-                                    .map(|r| r.height.saturating_sub(4))
-                                    .unwrap_or(10);
-                                preview_offset = preview_offset.saturating_sub(page);
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('f') => {
-                                let page = terminal
-                                    .size()
-                                    .map(|r| r.height.saturating_sub(4))
-                                    .unwrap_or(10);
-                                preview_offset = preview_offset.saturating_add(page);
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('d') => {
-                                let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
-                                preview_offset = preview_offset.saturating_add(half);
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('u') => {
-                                let half = terminal.size().map(|r| r.height / 2).unwrap_or(5);
-                                preview_offset = preview_offset.saturating_sub(half);
-                                needs_redraw = true;
-                            }
-                            KeyCode::Home => {
-                                preview_offset = 0;
-                                needs_redraw = true;
-                            }
-                            KeyCode::End => {
-                                preview_offset = u16::MAX;
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('g') if !ctrl && !alt => {
-                                preview_offset = 0;
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('G') if !ctrl && !alt => {
-                                preview_offset = u16::MAX;
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('?') if !ctrl => {
-                                show_help = !show_help;
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('q') => {
-                                focus = Focus::Selection;
-                                needs_redraw = true;
-                            }
-                            KeyCode::Char('Q') => {
-                                selected_ids.clear();
-                                break;
-                            }
-                            KeyCode::Enter => {
-                                // For single selection mode, Enter immediately selects and breaks
-                                if selection_goal == 1 {
-                                    if let Some(&oi) = filtered_indices.get(current_selection) {
-                                        selected_ids.clear();
-                                        selected_ids
-                                            .push(current_execs[oi].record.record_id.clone());
-                                    }
-                                    break;
-                                }
-                                if selected_ids.len() == selection_goal {
-                                    break;
-                                }
-                                if let Some(&oi) = filtered_indices.get(current_selection) {
-                                    let record_id = current_execs[oi].record.record_id.clone();
-                                    if let Some(pos) =
-                                        selected_ids.iter().position(|id| id == &record_id)
-                                    {
-                                        selected_ids.remove(pos);
-                                    } else if selected_ids.len() < selection_goal {
-                                        selected_ids.push(record_id);
-                                    }
-                                    needs_redraw = true;
-                                }
-                            }
-                            _ => {}
-                        },
-                    }
+            let terminal_height = terminal.size().ok().map(|r| r.height);
+            match Self::apply_interactive_selection_event(
+                &mut state,
+                event,
+                i18n,
+                selection_goal,
+                terminal_height,
+                &mut loader,
+                &mut delete_action,
+            ) {
+                InteractiveSelectionStep::Continue { needs_redraw: nr } => {
+                    needs_redraw |= nr;
                 }
-                Event::Resize(_, _) => {
-                    needs_redraw = true;
-                }
-                _ => {}
+                InteractiveSelectionStep::Break => break,
             }
         }
 
@@ -2320,11 +2297,13 @@ impl Differ {
         }
         let _ = terminal::disable_raw_mode();
 
+        let selected_ids = std::mem::take(&mut state.selected_ids);
         if selected_ids.len() == selection_goal {
             let mut picked: Vec<CommandExecution> = selected_ids
                 .into_iter()
                 .filter_map(|id| {
-                    current_execs
+                    state
+                        .current_execs
                         .iter()
                         .find(|e| e.record.record_id == id)
                         .cloned()
@@ -2551,20 +2530,36 @@ impl Differ {
         let preview_area = cols[1];
         f.render_widget(para, preview_area);
 
-        // Scrollbar (basic)
-        let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("▲"))
-            .end_symbol(Some("▼"));
-        // If content fits within viewport, make the thumb 100% height
-        let (sb_content_len, sb_pos) = if total_lines <= inner_h {
-            (inner_h, 0usize)
-        } else {
-            (total_lines, clamped as usize)
-        };
-        let mut sb_state = ScrollbarState::new(sb_content_len)
-            .position(sb_pos)
-            .viewport_content_length(inner_h);
-        f.render_stateful_widget(sb, preview_area, &mut sb_state);
+        // 滚动条 + 进度指示（仅当内容超出视口）
+        if total_lines > inner_h {
+            let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("▲"))
+                .end_symbol(Some("▼"));
+            let mut sb_state = ScrollbarState::new(total_lines)
+                .position(clamped as usize)
+                .viewport_content_length(inner_h);
+            f.render_stateful_widget(sb, preview_area, &mut sb_state);
+
+            // 右下角显示滚动进度：顶/底/{N}%
+            let progress = if clamped == 0 {
+                i18n.t("preview_scroll_top")
+            } else if (clamped as usize) + inner_h >= total_lines {
+                i18n.t("preview_scroll_bot")
+            } else {
+                let p = ((clamped as f32 / (total_lines - inner_h) as f32) * 100.0) as i32;
+                i18n.t_format("preview_scroll_percent", &[&p.to_string()])
+            };
+            let progress_area = ratatui::layout::Rect {
+                x: preview_area.right().saturating_sub(6),
+                y: preview_area.bottom().saturating_sub(2),
+                width: 5,
+                height: 1,
+            };
+            f.render_widget(
+                Paragraph::new(progress).style(Style::default().fg(Color::DarkGray)),
+                progress_area,
+            );
+        }
 
         // Help overlay (Selection)
         if show_help && !preview_focused {
@@ -2592,6 +2587,7 @@ impl Differ {
                 i18n.t("selection_help_select"),
                 i18n.t("selection_help_preview"),
                 i18n.t("selection_help_clear"),
+                i18n.t("selection_help_delete"),
                 format!(
                     "{}   {}",
                     i18n.t("preview_help_toggle"),

@@ -492,23 +492,149 @@ impl StoreManager {
         command: &str,
         files: &mut std::collections::HashSet<PathBuf>,
     ) {
-        // Simple file path extraction logic
-        let tokens: Vec<&str> = command.split_whitespace().collect();
+        Self::extract_files_from_command_impl(command, files)
+    }
 
-        for token in tokens {
-            let path = PathBuf::from(token);
-
-            // If it looks like a file path (contains / or . extension)
-            if token.contains('/') || path.extension().is_some() || token == "ls" || token == "cat"
+    fn extract_files_from_command_impl(
+        command: &str,
+        files: &mut std::collections::HashSet<PathBuf>,
+    ) {
+        fn strip_surrounding_quotes(s: &str) -> &str {
+            let bytes = s.as_bytes();
+            if bytes.len() >= 2
+                && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+                    || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
             {
+                &s[1..s.len() - 1]
+            } else {
+                s
+            }
+        }
+
+        fn is_command_separator(token: &str) -> bool {
+            matches!(token, "|" | "||" | "&&" | ";")
+        }
+
+        fn is_redirection_operator(token: &str) -> bool {
+            matches!(
+                token,
+                ">" | ">>" | "<" | "<<" | "2>" | "2>>" | "1>" | "1>>" | "&>" | "&>>"
+            )
+        }
+
+        fn is_shell_syntax_token(token: &str) -> bool {
+            is_command_separator(token)
+                || is_redirection_operator(token)
+                || matches!(token, "&" | "(" | ")" | "{" | "}")
+        }
+
+        fn is_wrapper_command(token: &str) -> bool {
+            matches!(token, "sudo" | "env" | "command" | "builtin" | "time")
+        }
+
+        fn looks_like_path(token: &str) -> bool {
+            if token.is_empty() {
+                return false;
+            }
+            if matches!(token, "." | ".." | "~") {
+                return false;
+            }
+            if token.contains('=') && !token.contains('/') {
+                return false;
+            }
+            token.starts_with('/')
+                || token.starts_with("./")
+                || token.starts_with("../")
+                || token.starts_with("~/")
+                || token.contains('/')
+                || std::path::Path::new(token).extension().is_some()
+        }
+
+        fn looks_like_glob(token: &str) -> bool {
+            token.contains('*') || token.contains('?') || token.contains('[')
+        }
+
+        let tokens: Vec<&str> = command.split_whitespace().collect();
+        if tokens.is_empty() {
+            return;
+        }
+
+        let mut expect_command = true;
+        let mut expect_redirection_target = false;
+
+        for raw in tokens {
+            let token = strip_surrounding_quotes(raw);
+            if token.is_empty() || token == "--" {
+                continue;
+            }
+
+            if expect_redirection_target {
+                expect_redirection_target = false;
+                let path = PathBuf::from(token);
                 if path.exists() {
                     if let Ok(abs_path) = fs::canonicalize(&path) {
                         files.insert(abs_path);
                     }
                 } else {
-                    // Record possible path even if file doesn't exist
                     files.insert(path);
                 }
+                continue;
+            }
+
+            if is_redirection_operator(token) {
+                expect_redirection_target = true;
+                continue;
+            }
+
+            if is_command_separator(token) {
+                expect_command = true;
+                continue;
+            }
+
+            if is_shell_syntax_token(token) {
+                continue;
+            }
+
+            if token.starts_with('-') {
+                continue;
+            }
+
+            if expect_command {
+                if token.contains('=') && !token.contains('/') {
+                    continue;
+                }
+                if is_wrapper_command(token) {
+                    continue;
+                }
+                if looks_like_path(token) {
+                    let path = PathBuf::from(token);
+                    if path.exists() {
+                        if let Ok(abs_path) = fs::canonicalize(&path) {
+                            files.insert(abs_path);
+                        }
+                    } else {
+                        files.insert(path);
+                    }
+                }
+                expect_command = false;
+                continue;
+            }
+
+            if !looks_like_path(token) {
+                continue;
+            }
+
+            if looks_like_glob(token) && !std::path::Path::new(token).exists() {
+                continue;
+            }
+
+            let path = PathBuf::from(token);
+            if path.exists() {
+                if let Ok(abs_path) = fs::canonicalize(&path) {
+                    files.insert(abs_path);
+                }
+            } else {
+                files.insert(path);
             }
         }
     }
@@ -573,35 +699,99 @@ impl StoreManager {
         let mut all_records = Vec::new();
 
         if records_dir.exists() {
-            for hash_dir in fs::read_dir(records_dir)? {
+            // First pass: collect all meta files to avoid modification during iteration
+            let mut meta_files = Vec::new();
+            for hash_dir in fs::read_dir(&records_dir)? {
                 let hash_dir = hash_dir?;
                 let hash_dir_path = hash_dir.path();
-
                 if hash_dir_path.is_dir() {
                     for entry in fs::read_dir(&hash_dir_path)? {
                         let entry = entry?;
                         let path = entry.path();
-
-                        if path.extension().and_then(|s| s.to_str()) == Some("json")
-                            && path
-                                .file_name()
-                                .unwrap()
-                                .to_str()
-                                .unwrap()
-                                .starts_with("meta_")
-                        {
-                            if let Ok(record) =
-                                serde_json::from_reader::<_, CommandRecord>(fs::File::open(&path)?)
-                            {
-                                // Apply time filter if specified
-                                if let Some(cutoff) = since {
-                                    if record.timestamp >= cutoff {
-                                        all_records.push(record);
-                                    }
-                                } else {
-                                    all_records.push(record);
+                        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                                if name.starts_with("meta_") {
+                                    meta_files.push(path);
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // Second pass: process, potentially migrate, and collect for index
+            for meta_path in meta_files {
+                let mut record: CommandRecord =
+                    serde_json::from_reader(fs::File::open(&meta_path)?)?;
+
+                let new_command = crate::storage::format_command(&record.command);
+                let new_hash = crate::storage::hash_command(&new_command);
+
+                if new_hash != record.command_hash || new_command != record.command {
+                    let old_hash = record.command_hash.clone();
+                    let timestamp = record.timestamp.timestamp();
+
+                    record.command = new_command;
+                    record.command_hash = new_hash.clone();
+                    record.record_id =
+                        format!("{}_{}", record.command_hash, record.timestamp.timestamp());
+
+                    let old_dir = records_dir.join(&old_hash);
+                    let new_dir = records_dir.join(&new_hash);
+                    fs::create_dir_all(&new_dir)?;
+
+                    if let Some(filename) = meta_path.file_name() {
+                        let new_meta_path = new_dir.join(filename);
+                        let old_stdout = old_dir.join(format!("stdout_{}.txt", timestamp));
+                        let old_stderr = old_dir.join(format!("stderr_{}.txt", timestamp));
+                        let new_stdout = new_dir.join(format!("stdout_{}.txt", timestamp));
+                        let new_stderr = new_dir.join(format!("stderr_{}.txt", timestamp));
+
+                        if old_stdout != new_stdout && old_stdout.exists() {
+                            fs::rename(&old_stdout, &new_stdout).or_else(
+                                |_| -> std::io::Result<()> {
+                                    fs::copy(&old_stdout, &new_stdout)?;
+                                    fs::remove_file(&old_stdout).ok();
+                                    Ok(())
+                                },
+                            )?;
+                        }
+                        if old_stderr != new_stderr && old_stderr.exists() {
+                            fs::rename(&old_stderr, &new_stderr).or_else(
+                                |_| -> std::io::Result<()> {
+                                    fs::copy(&old_stderr, &new_stderr)?;
+                                    fs::remove_file(&old_stderr).ok();
+                                    Ok(())
+                                },
+                            )?;
+                        }
+
+                        serde_json::to_writer_pretty(fs::File::create(&new_meta_path)?, &record)?;
+
+                        if meta_path != new_meta_path {
+                            fs::remove_file(&meta_path).ok();
+                        }
+                    }
+                }
+
+                // Add to index if it matches time filter
+                if let Some(cutoff) = since {
+                    if record.timestamp >= cutoff {
+                        all_records.push(record);
+                    }
+                } else {
+                    all_records.push(record);
+                }
+            }
+
+            // Third pass: clean up empty hash directories
+            for hash_dir in fs::read_dir(&records_dir)? {
+                let hash_dir = hash_dir?;
+                let path = hash_dir.path();
+                if path.is_dir() {
+                    if let Ok(mut entries) = fs::read_dir(&path) {
+                        if entries.next().is_none() {
+                            let _ = fs::remove_dir(&path);
                         }
                     }
                 }
@@ -696,5 +886,46 @@ mod test_support {
 
             Ok(existing.len())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extract(command: &str) -> std::collections::HashSet<std::path::PathBuf> {
+        let mut files = std::collections::HashSet::new();
+        StoreManager::extract_files_from_command_impl(command, &mut files);
+        files
+    }
+
+    #[test]
+    fn extract_files_does_not_include_common_commands() {
+        let files = extract("ls -la");
+        assert!(!files.contains(&std::path::PathBuf::from("ls")));
+
+        let files = extract("cat");
+        assert!(!files.contains(&std::path::PathBuf::from("cat")));
+    }
+
+    #[test]
+    fn extract_files_includes_existing_file_args() {
+        let files = extract("cat Cargo.toml");
+        let expected = std::fs::canonicalize("Cargo.toml").unwrap();
+        assert!(files.contains(&expected));
+    }
+
+    #[test]
+    fn extract_files_includes_redirection_targets() {
+        let out = "dt_test_out_9b0c4a";
+        let files = extract(&format!("echo hi > {out}"));
+        assert!(files.contains(&std::path::PathBuf::from(out)));
+    }
+
+    #[test]
+    fn extract_files_includes_command_when_it_is_a_path() {
+        let files = extract("./Cargo.toml arg");
+        let expected = std::fs::canonicalize("Cargo.toml").unwrap();
+        assert!(files.contains(&expected));
     }
 }
